@@ -151,7 +151,7 @@ parse_result_t unicore_ascii_try_parse(gps_t *gps, ringbuffer_t *rb) {
 
     /* 7. advance */
     ringbuffer_advance(rb, pkt_len);
-    gps->parser_ctx.stats.unicore_ascii_packets++;
+    gps->parser_ctx.stats.unicore_cmd_packets++;
 
     /* 8. 명령어 응답 대기 중이면 세마포어 시그널 */
     if (gps->parser_ctx.cmd_ctx.waiting) {
@@ -164,7 +164,7 @@ parse_result_t unicore_ascii_try_parse(gps_t *gps, ringbuffer_t *rb) {
     /* 9. 이벤트 핸들러 호출 */
     if (gps->handler) {
         gps_msg_t msg = { .unicore.response = resp };
-        gps->handler(gps, GPS_EVENT_CMD_RESPONSE, GPS_PROTOCOL_UNICORE_ASCII, msg);
+        gps->handler(gps, GPS_EVENT_CMD_RESPONSE, GPS_PROTOCOL_UNICORE_CMD, msg);
     }
 
     return PARSE_OK;

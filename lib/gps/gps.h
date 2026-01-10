@@ -32,9 +32,10 @@ typedef void (*gps_evt_handler)(gps_t *gps, gps_event_t event,
  * RTCM 데이터 저장 구조체 (LoRa 전송용)
  *===========================================================================*/
 typedef struct {
-    uint16_t msg_type;
-    uint16_t total_len;
-    uint8_t payload[GPS_MAX_PACKET_LEN];
+    ringbuffer_t rb;                     /**< RTCM 링버퍼 (여러 메시지 큐잉) */
+    char rb_mem[4096];                   /**< 링버퍼 메모리 (RTCM은 큰 편) */
+    SemaphoreHandle_t mutex;             /**< RTCM 버퍼 접근 보호 */
+    uint16_t last_msg_type;              /**< 마지막 수신 메시지 타입 */
 } gps_rtcm_data_t;
 
 /*===========================================================================
@@ -51,7 +52,7 @@ typedef struct {
 typedef struct gps_s {
     /*--- OS 변수 ---*/
     TaskHandle_t pkt_task;          /**< 패킷 처리 태스크 핸들 */
-    SemaphoreHandle_t mutex;        /**< 공유자원 보호 뮤텍스 */
+    SemaphoreHandle_t mutex;        /**< 송신 보호 뮤텍스 (gps_send_cmd_sync 전용) */
     QueueHandle_t pkt_queue;        /**< RX 신호 큐 */
 
     /*--- HAL ---*/

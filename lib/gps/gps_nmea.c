@@ -96,8 +96,23 @@ parse_result_t nmea_try_parse(gps_t *gps, ringbuffer_t *rb) {
     if (!ringbuffer_find_char(rb, '\r', GPS_NMEA_MAX_LEN, &cr_pos)) {
         /* '\r' 없음 - 최대 길이 초과하면 INVALID */
         if (ringbuffer_size(rb) >= GPS_NMEA_MAX_LEN) {
+            LOG_WARN("NMEA packet too long without \\r, dropping");
             return PARSE_INVALID;
         }
+
+        /* 타임아웃 체크 (마지막 수신 후 1초) */
+        uint32_t now = xTaskGetTickCount();
+        if (gps->parser_ctx.stats.last_rx_tick != 0) {
+            uint32_t elapsed = now - gps->parser_ctx.stats.last_rx_tick;
+            if (elapsed > pdMS_TO_TICKS(1000)) {
+                /* 1초 이상 '\r' 안옴 - 버퍼 비우기 */
+                LOG_WARN("NMEA packet timeout, clearing buffer");
+                ringbuffer_reset(rb);
+                gps->parser_ctx.stats.rx_timeout_cnt++;
+                return PARSE_INVALID;
+            }
+        }
+
         return PARSE_NEED_MORE;
     }
 
@@ -143,6 +158,7 @@ parse_result_t nmea_try_parse(gps_t *gps, ringbuffer_t *rb) {
     /* 10. advance 및 이벤트 */
     ringbuffer_advance(rb, pkt_len);
     gps->parser_ctx.stats.nmea_packets++;
+    gps->parser_ctx.stats.last_nmea_tick = xTaskGetTickCount();
 
     /* URC이면 이벤트 핸들러 호출 */
     if (nmea_msg_table[msg_idx].is_urc && gps->handler) {

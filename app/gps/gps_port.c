@@ -219,7 +219,8 @@ void USART2_IRQHandler(void)
     if(g_gps_instance && g_gps_instance->pkt_queue)
     {
       size_t len = sizeof(gps_recv_buf) - LL_DMA_GetDataLength(DMA1, LL_DMA_STREAM_5);
-      ringbuffer_write(&g_gps_instance->data, gps_recv_buf, len);
+      ringbuffer_write(&g_gps_instance->rx_buf, gps_recv_buf, len);
+      g_gps_instance->parser_ctx.stats.last_rx_tick = xTaskGetTickCountFromISR();
 
       xQueueSendFromISR(g_gps_instance->pkt_queue, &dummy, &xHigherPriorityTaskWoken);
     }
@@ -231,7 +232,8 @@ void USART2_IRQHandler(void)
     if(g_gps_instance && g_gps_instance->pkt_queue)
     {
       size_t len = sizeof(gps_recv_buf) - LL_DMA_GetDataLength(DMA1, LL_DMA_STREAM_5);
-      ringbuffer_write(&g_gps_instance->data, gps_recv_buf, len);
+      ringbuffer_write(&g_gps_instance->rx_buf, gps_recv_buf, len);
+      g_gps_instance->parser_ctx.stats.last_rx_tick = xTaskGetTickCountFromISR();
       xQueueSendFromISR(g_gps_instance->pkt_queue, &dummy, &xHigherPriorityTaskWoken);
     }
 
@@ -242,7 +244,8 @@ void USART2_IRQHandler(void)
     if(g_gps_instance && g_gps_instance->pkt_queue)
     {
       size_t len = sizeof(gps_recv_buf) - LL_DMA_GetDataLength(DMA1, LL_DMA_STREAM_5);
-      ringbuffer_write(&g_gps_instance->data, gps_recv_buf, len);
+      ringbuffer_write(&g_gps_instance->rx_buf, gps_recv_buf, len);
+      g_gps_instance->parser_ctx.stats.last_rx_tick = xTaskGetTickCountFromISR();
       xQueueSendFromISR(g_gps_instance->pkt_queue, &dummy, &xHigherPriorityTaskWoken);
     }
 

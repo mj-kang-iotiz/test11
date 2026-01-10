@@ -74,53 +74,89 @@ void rtcm_tx_task_init(void) {
   LOG_INFO("RTCM async transmission initialized (no task)");
 }
 
+/**
+ * @brief RTCM 데이터를 LoRa로 전송 (링버퍼에서 읽기)
+ *
+ * 링버퍼에서 RTCM 패킷을 하나씩 읽어서 LoRa로 전송합니다.
+ * 여러 RTCM 메시지가 큐잉되어 있으면 하나씩 순차 전송됩니다.
+ *
+ * @param gps GPS 핸들
+ * @return true: 성공, false: 실패
+ */
 bool rtcm_send_to_lora(gps_t *gps) {
-  if (!gps) {
-    LOG_ERR("GPS handle is NULL");
-    return false;
-  }
-
-  // RTCM packet total length
-  size_t rtcm_len = gps->rtcm.total_len;
-
-  if (rtcm_len == 0) {
-    LOG_ERR("RTCM length is zero");
-    return false;
-  }
-
-  // Calculate total fragments needed
-  uint8_t total_fragments = (rtcm_len + RTCM_MAX_FRAGMENT_SIZE - 1) / RTCM_MAX_FRAGMENT_SIZE;
-
-  LOG_INFO("RTCM TX: type=%d, len=%d, fragments=%d",
-           gps->rtcm.msg_type, rtcm_len, total_fragments);
-
-  // Queue all fragments at once
-  for (uint8_t i = 0; i < total_fragments; i++) {
-    size_t offset = i * RTCM_MAX_FRAGMENT_SIZE;
-    size_t fragment_len = (rtcm_len - offset > RTCM_MAX_FRAGMENT_SIZE)
-                          ? RTCM_MAX_FRAGMENT_SIZE
-                          : (rtcm_len - offset);
-
-    uint32_t toa_ms = calculate_lora_toa(fragment_len);
-
-    LOG_DEBUG("Queueing fragment %d/%d: %d bytes",
-             i + 1, total_fragments, fragment_len);
-
-    // Last fragment gets callback for logging
-    bool is_last = (i == total_fragments - 1);
-    lora_command_callback_t callback = is_last ? rtcm_last_fragment_callback : NULL;
-    void *user_data = is_last ? (void*)(uintptr_t)gps->rtcm.msg_type : NULL;
-
-    if (!lora_send_p2p_raw_async(&gps->payload[offset], fragment_len, toa_ms,
-                                  callback, user_data)) {
-      LOG_ERR("Failed to queue fragment %d/%d - LoRa TX queue full?", i + 1, total_fragments);
-      return false;
+    if (!gps) {
+        LOG_ERR("GPS handle is NULL");
+        return false;
     }
-  }
 
-  // All fragments queued successfully - return immediately (non-blocking)
-  LOG_INFO("All %d fragments queued to LoRa TX task", total_fragments);
-  return true;
+    /* RTCM 링버퍼에서 패킷 읽기 */
+    uint8_t packet[GPS_MAX_PACKET_LEN];
+    size_t rtcm_len = 0;
+
+    if (xSemaphoreTake(gps->rtcm_data.mutex, pdMS_TO_TICKS(100)) != pdTRUE) {
+        LOG_ERR("Failed to acquire RTCM mutex");
+        return false;
+    }
+
+    /* 링버퍼 크기 확인 */
+    if (ringbuffer_size(&gps->rtcm_data.rb) < RTCM_MIN_PACKET) {
+        xSemaphoreGive(gps->rtcm_data.mutex);
+        return false;  /* 데이터 없음 */
+    }
+
+    /* 헤더 peek (preamble + length) */
+    uint8_t header[RTCM_HEADER_SIZE];
+    if (!ringbuffer_peek(&gps->rtcm_data.rb, (char*)header, RTCM_HEADER_SIZE, 0)) {
+        xSemaphoreGive(gps->rtcm_data.mutex);
+        return false;
+    }
+
+    /* 페이로드 길이 추출 */
+    uint16_t payload_len = ((header[1] & 0x03) << 8) | header[2];
+    rtcm_len = RTCM_HEADER_SIZE + payload_len + RTCM_CRC_SIZE;
+
+    /* 전체 패킷 읽기 */
+    if (ringbuffer_size(&gps->rtcm_data.rb) < rtcm_len || rtcm_len > GPS_MAX_PACKET_LEN) {
+        xSemaphoreGive(gps->rtcm_data.mutex);
+        return false;
+    }
+
+    ringbuffer_read(&gps->rtcm_data.rb, (char*)packet, rtcm_len);
+    xSemaphoreGive(gps->rtcm_data.mutex);
+
+    /* 메시지 타입 추출 */
+    uint16_t msg_type = 0;
+    if (payload_len >= 2) {
+        msg_type = (packet[3] << 4) | ((packet[4] >> 4) & 0x0F);
+    }
+
+    /* Fragment 계산 및 전송 */
+    uint8_t total_fragments = (rtcm_len + RTCM_MAX_FRAGMENT_SIZE - 1) / RTCM_MAX_FRAGMENT_SIZE;
+
+    LOG_INFO("RTCM TX: type=%d, len=%d, fragments=%d", msg_type, rtcm_len, total_fragments);
+
+    for (uint8_t i = 0; i < total_fragments; i++) {
+        size_t offset = i * RTCM_MAX_FRAGMENT_SIZE;
+        size_t fragment_len = (rtcm_len - offset > RTCM_MAX_FRAGMENT_SIZE)
+                              ? RTCM_MAX_FRAGMENT_SIZE
+                              : (rtcm_len - offset);
+
+        uint32_t toa_ms = calculate_lora_toa(fragment_len);
+
+        LOG_DEBUG("Queueing fragment %d/%d: %d bytes", i + 1, total_fragments, fragment_len);
+
+        bool is_last = (i == total_fragments - 1);
+        lora_command_callback_t callback = is_last ? rtcm_last_fragment_callback : NULL;
+        void *user_data = is_last ? (void*)(uintptr_t)msg_type : NULL;
+
+        if (!lora_send_p2p_raw_async(&packet[offset], fragment_len, toa_ms, callback, user_data)) {
+            LOG_ERR("Failed to queue fragment %d/%d - LoRa TX queue full?", i + 1, total_fragments);
+            return false;
+        }
+    }
+
+    LOG_INFO("All %d fragments queued to LoRa TX task", total_fragments);
+    return true;
 }
 
 /**
@@ -271,16 +307,24 @@ parse_result_t rtcm_try_parse(gps_t *gps, ringbuffer_t *rb) {
         msg_type = (packet[3] << 4) | ((packet[4] >> 4) & 0x0F);
     }
 
-    /* 8. RTCM 데이터 저장 (LoRa 전송용) */
-    gps->rtcm_data.msg_type = msg_type;
-    gps->rtcm_data.total_len = total_len;
-    if (total_len <= sizeof(gps->rtcm_data.payload)) {
-        memcpy(gps->rtcm_data.payload, packet, total_len);
+    /* 8. RTCM 데이터를 링버퍼에 저장 (LoRa 전송용) */
+    if (xSemaphoreTake(gps->rtcm_data.mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+        /* 패킷 전체를 링버퍼에 쓰기 (여러 메시지 큐잉 가능) */
+        size_t written = ringbuffer_write(&gps->rtcm_data.rb, (char*)packet, total_len);
+        if (written == total_len) {
+            gps->rtcm_data.last_msg_type = msg_type;
+        } else {
+            LOG_WARN("RTCM buffer full, dropped msg_type=%d", msg_type);
+        }
+        xSemaphoreGive(gps->rtcm_data.mutex);
+    } else {
+        LOG_ERR("Failed to acquire RTCM mutex");
     }
 
     /* 9. advance */
     ringbuffer_advance(rb, total_len);
     gps->parser_ctx.stats.rtcm_packets++;
+    gps->parser_ctx.stats.last_rtcm_tick = xTaskGetTickCount();
 
     /* 10. 이벤트 핸들러 호출 (URC) */
     if (gps->handler) {

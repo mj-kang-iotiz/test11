@@ -34,6 +34,9 @@ bool gps_init(gps_t *gps) {
     /* RX 링버퍼 초기화 */
     ringbuffer_init(&gps->rx_buf, gps->rx_buf_mem, sizeof(gps->rx_buf_mem));
 
+    /* RTCM 링버퍼 초기화 */
+    ringbuffer_init(&gps->rtcm_data.rb, gps->rtcm_data.rb_mem, sizeof(gps->rtcm_data.rb_mem));
+
     /* 파서 초기화 */
     gps_parser_init(gps);
 
@@ -53,6 +56,13 @@ bool gps_init(gps_t *gps) {
     gps->cmd_sem = xSemaphoreCreateBinary();
     if (!gps->cmd_sem) {
         LOG_ERR("Failed to create cmd_sem");
+        return false;
+    }
+
+    /* RTCM 버퍼 mutex 생성 */
+    gps->rtcm_data.mutex = xSemaphoreCreateMutex();
+    if (!gps->rtcm_data.mutex) {
+        LOG_ERR("Failed to create rtcm_mutex");
         return false;
     }
 
@@ -89,11 +99,22 @@ void gps_set_evt_handler(gps_t *gps, gps_evt_handler handler) {
 
 /*===========================================================================
  * 동기 명령어 전송
+ *
+ * 멀티태스크 지원:
+ * - 여러 태스크가 동시에 호출 가능
+ * - mutex로 한 번에 하나씩만 송신하도록 보호
+ * - RX Task는 mutex 사용 안함 (데드락 방지)
  *===========================================================================*/
 
 bool gps_send_cmd_sync(gps_t *gps, const char *cmd, uint32_t timeout_ms) {
     if (!gps || !cmd || !gps->ops || !gps->ops->send) {
         LOG_ERR("Invalid parameters");
+        return false;
+    }
+
+    /* 전체를 mutex로 보호 (한 번에 하나씩만 송신) */
+    if (xSemaphoreTake(gps->mutex, pdMS_TO_TICKS(timeout_ms)) != pdTRUE) {
+        LOG_ERR("Failed to acquire mutex for cmd: %s", cmd);
         return false;
     }
 
@@ -111,19 +132,24 @@ bool gps_send_cmd_sync(gps_t *gps, const char *cmd, uint32_t timeout_ms) {
 
     LOG_DEBUG("CMD TX: %s", cmd);
 
-    /* 응답 대기 */
+    /* 응답 대기 (RX Task가 응답 받으면 세마포어 시그널) */
     BaseType_t got = xSemaphoreTake(gps->cmd_sem, pdMS_TO_TICKS(timeout_ms));
 
     /* 정리 */
     gps->parser_ctx.cmd_ctx.waiting = false;
 
-    if (got != pdTRUE) {
+    bool result = (got == pdTRUE) && gps->parser_ctx.cmd_ctx.result_ok;
+
+    /* Mutex 해제 */
+    xSemaphoreGive(gps->mutex);
+
+    if (!got) {
         LOG_WARN("CMD timeout: %s", cmd);
         return false;
     }
 
-    LOG_DEBUG("CMD response: %s", gps->parser_ctx.cmd_ctx.result_ok ? "OK" : "ERROR");
-    return gps->parser_ctx.cmd_ctx.result_ok;
+    LOG_DEBUG("CMD response: %s", result ? "OK" : "ERROR");
+    return result;
 }
 
 /*===========================================================================
