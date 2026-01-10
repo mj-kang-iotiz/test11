@@ -1,5 +1,7 @@
 #include "rtcm.h"
 #include "gps.h"
+#include "gps_parser.h"
+#include "gps_proto_def.h"
 #include "lora_app.h"
 #include "FreeRTOS.h"
 #include "task.h"
@@ -11,6 +13,15 @@
 #endif
 
 #include "log.h"
+
+/*===========================================================================
+ * RTCM 상수
+ *===========================================================================*/
+#define RTCM_PREAMBLE       0xD3
+#define RTCM_HEADER_SIZE    3     /* preamble(1) + length(2) */
+#define RTCM_CRC_SIZE       3     /* CRC24Q */
+#define RTCM_MIN_PACKET     6     /* header(3) + CRC(3) */
+#define RTCM_MAX_PAYLOAD    1023  /* 10-bit length field max */
 
 // HEX ASCII로 변환하면 데이터가 2배 증가:
 // LoRa 최대 236 HEX 문자 = 118 바이트 binary
@@ -191,4 +202,91 @@ bool rtcm_validate_packet(const uint8_t *buffer, size_t len)
   LOG_INFO("RTCM packet valid: len=%d, payload=%d, CRC=0x%06X",
            len, payload_len, received_crc);
   return true;
+}
+
+/*===========================================================================
+ * RTCM 패킷 파싱 (Chain 방식)
+ *===========================================================================*/
+
+parse_result_t rtcm_try_parse(gps_t *gps, ringbuffer_t *rb) {
+    /* 1. 첫 바이트 확인 - 0xD3 아니면 NOT_MINE */
+    uint8_t first;
+    if (!ringbuffer_peek(rb, (char*)&first, 1, 0)) {
+        return PARSE_NEED_MORE;
+    }
+    if (first != RTCM_PREAMBLE) {
+        return PARSE_NOT_MINE;
+    }
+
+    /* 2. 헤더 (3바이트) peek */
+    if (ringbuffer_size(rb) < RTCM_HEADER_SIZE) {
+        return PARSE_NEED_MORE;
+    }
+
+    uint8_t header[RTCM_HEADER_SIZE];
+    if (!ringbuffer_peek(rb, (char*)header, RTCM_HEADER_SIZE, 0)) {
+        return PARSE_NEED_MORE;
+    }
+
+    /* 3. 페이로드 길이 추출 (10-bit) */
+    uint16_t payload_len = ((header[1] & 0x03) << 8) | header[2];
+
+    if (payload_len > RTCM_MAX_PAYLOAD) {
+        /* 비정상적인 길이 */
+        return PARSE_INVALID;
+    }
+
+    /* 4. 전체 패킷 길이 = 헤더(3) + 페이로드 + CRC(3) */
+    size_t total_len = RTCM_HEADER_SIZE + payload_len + RTCM_CRC_SIZE;
+
+    if (ringbuffer_size(rb) < total_len) {
+        return PARSE_NEED_MORE;
+    }
+
+    /* 5. 전체 패킷 peek */
+    uint8_t packet[GPS_MAX_PACKET_LEN];
+    if (total_len > GPS_MAX_PACKET_LEN) {
+        return PARSE_INVALID;
+    }
+
+    if (!ringbuffer_peek(rb, (char*)packet, total_len, 0)) {
+        return PARSE_NEED_MORE;
+    }
+
+    /* 6. CRC24Q 검증 */
+    uint32_t calc_crc = rtcm_calc_crc(packet, total_len - RTCM_CRC_SIZE);
+    uint32_t recv_crc = ((uint32_t)packet[total_len - 3] << 16) |
+                        ((uint32_t)packet[total_len - 2] << 8) |
+                        packet[total_len - 1];
+
+    if (calc_crc != recv_crc) {
+        gps->parser_ctx.stats.crc_errors++;
+        ringbuffer_advance(rb, total_len);
+        return PARSE_INVALID;
+    }
+
+    /* 7. 메시지 타입 추출 (12-bit, 페이로드 첫 12비트) */
+    uint16_t msg_type = 0;
+    if (payload_len >= 2) {
+        msg_type = (packet[3] << 4) | ((packet[4] >> 4) & 0x0F);
+    }
+
+    /* 8. RTCM 데이터 저장 (LoRa 전송용) */
+    gps->rtcm_data.msg_type = msg_type;
+    gps->rtcm_data.total_len = total_len;
+    if (total_len <= sizeof(gps->rtcm_data.payload)) {
+        memcpy(gps->rtcm_data.payload, packet, total_len);
+    }
+
+    /* 9. advance */
+    ringbuffer_advance(rb, total_len);
+    gps->parser_ctx.stats.rtcm_packets++;
+
+    /* 10. 이벤트 핸들러 호출 (URC) */
+    if (gps->handler) {
+        gps_msg_t msg = { .rtcm.msg_type = msg_type };
+        gps->handler(gps, GPS_EVENT_DATA_PARSED, GPS_PROTOCOL_RTCM, msg);
+    }
+
+    return PARSE_OK;
 }

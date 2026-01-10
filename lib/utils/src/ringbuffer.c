@@ -177,11 +177,15 @@ bool ringbuffer_read_byte(ringbuffer_t *rb, char *data) {
 bool ringbuffer_peek(ringbuffer_t *rb, char *data, size_t len, size_t offset) {
     DEV_ASSERT(rb != NULL);
     DEV_ASSERT(data != NULL);
-    DEV_ASSERT(len != 0 && len < ringbuffer_capacity(rb));
-    DEV_ASSERT(offset < ringbuffer_size(rb));
+
+    // len == 0이면 아무것도 안 함
+    if (len == 0) {
+        return true;
+    }
 
     size_t current_size = ringbuffer_size(rb);
-    
+
+    // 데이터 부족하면 false 리턴 (assert로 죽이지 않음)
     if (offset >= current_size || len > (current_size - offset)) {
         return false;
     }
