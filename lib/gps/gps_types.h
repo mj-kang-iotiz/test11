@@ -17,14 +17,15 @@ typedef enum {
 } gps_parse_state_t;
 
 /**
- * @brief NMEA183 프로토콜 sentence
- *
+ * @brief NMEA183 프로토콜 sentence (X-Macro로 자동 생성)
  */
+#include "gps_proto_def.h"
+
 typedef enum {
   GPS_NMEA_MSG_NONE = 0,
-  GPS_NMEA_MSG_GGA = 1,
-  GPS_NMEA_MSG_RMC = 2,
-  GPS_NMEA_MSG_THS = 3,
+#define X(name, str, handler, field_count, is_urc) GPS_NMEA_MSG_##name,
+  NMEA_MSG_TABLE(X)
+#undef X
   GPS_NMEA_MSG_INVALID = UINT8_MAX
 } gps_nmea_msg_t;
 
