@@ -129,9 +129,19 @@ static inline uint8_t check_unicore_chksum(gps_t *gps) {
  *
  * @param[out] gps
  */
-void gps_init(gps_t *gps) {
+bool gps_init(gps_t *gps) {
   memset(gps, 0, sizeof(*gps));
+  gps->pkt_queue = xQueueCreate(10, sizeof(uint8_t));
   gps->mutex = xSemaphoreCreateMutex();
+  gps->cmd_sem = xSemaphoreCreateBinary();
+
+  xTaskCreate(gps_process_task, "gps_pkt", 1024,
+                    (void*)gps,
+                    tskIDLE_PRIORITY + 1, &gps->pkt_task);
+
+  gps->is_running = true;
+
+  return true;
 }
 
 /**
@@ -361,4 +371,20 @@ void gps_set_evt_handler(gps_t *gps, gps_evt_handler handler) {
   if (handler) {
     gps->handler = handler;
   }
+}
+
+
+static void gps_process_task(void *pvParameter) {
+  gps_t *inst = (gps_t *)pvParameter;
+
+  inst->is_alive = true;
+  
+  while (1) {
+    xQueueReceive(inst->pkt_queue, &dummy, portMAX_DELAY);
+    
+    
+  }
+
+  inst->is_alive = false;
+  vTaskDelete(NULL);
 }

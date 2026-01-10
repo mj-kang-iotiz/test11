@@ -7,73 +7,12 @@
 typedef struct gps_s gps_t;
 
 /**
- * @brief 처리중인 GPS 프로토콜 종류
- *
- */
-typedef enum {
-  GPS_PROTOCOL_NONE = 0,
-  GPS_PROTOCOL_NMEA = 1,
-  GPS_PROTOCOL_UBX = 2,
-  GPS_PROTOCOL_UNICORE_BIN = 3,
-  GPS_PROTOCOL_UNICORE = 4,
-  GPS_PROTOCOL_RTCM = 5,
-  GPS_PROTOCOL_INVALID = UINT8_MAX
-} gps_protocol_t;
-
-typedef enum {
-  GPS_EVENT_NONE = 0,
-
-  /* 공통 데이터 이벤트 */
-  GPS_EVENT_DATA_PARSED, // 프로토콜 데이터 파싱 완료
-
-  GPS_EVENT_INVALID = UINT8_MAX
-} gps_event_t;
-
-/**
  * @brief GPS 파싱 상태
  *
  */
 typedef enum {
   GPS_PARSE_STATE_NONE = 0,
 
-  /* NMEA 183 protocol */
-  GPS_PARSE_STATE_NMEA_START = 1,
-  GPS_PARSE_STATE_NMEA_ADDR = 2,
-  GPS_PARSE_STATE_NMEA_DATA = 3,
-  GPS_PARSE_STATE_NMEA_CHKSUM = 4,
-  GPS_PARSE_STATE_NMEA_END_SEQ = 5,
-
-  /* UBX protocol */
-  GPS_PARSE_STATE_UBX_SYNC_1 = 10,
-  GPS_PARSE_STATE_UBX_SYNC_2 = 11,
-  GPS_PARSE_STATE_UBX_MSG_CLASS = 12,
-  GPS_PARSE_STATE_UBX_MSG_ID = 13,
-  GPS_PARSE_STATE_UBX_LEN = 14,
-  GPS_PARSE_STATE_UBX_PAYLOAD = 15,
-  GPS_PARSE_STATE_UBX_CHKSUM_A = 16,
-  GPS_PARSE_STATE_UBX_CHKSUM_B = 17,
-
-  /* UNICORE protocol */
-  GPS_PARSE_STATE_UNICORE_START = 20,
-  GPS_PARSE_STATE_UNICORE_DATA = 21,
-  GPS_PARSE_STATE_UNICORE_CHKSUM = 22,
-
-  /* UNICORE BINARY protocol */
-  GPS_PARSE_STATE_UNICORE_SYNC1 = 30,
-  GPS_PARSE_STATE_UNICORE_SYNC2 = 31,
-  GPS_PARSE_STATE_UNICORE_SYNC3 = 32,
-  GPS_PARSE_STATE_UNICORE_MESSAGE_ID = 33,
-  GPS_PARSE_STATE_UNICORE_MESSAGE_LEN = 34,
-  GPS_PARSE_STATE_UNICORE_PAYLOAD = 35,
-  GPS_PARSE_STATE_UNICORE_CRC = 36,
-
-  /* RTCM3 protocol */
-  GPS_PARSE_STATE_RTCM_PREAMBLE = 40,
-  GPS_PARSE_STATE_RTCM_LEN_1 = 41,
-  GPS_PARSE_STATE_RTCM_LEN_2 = 42,
-  GPS_PARSE_STATE_RTCM_PAYLOAD = 43,
-  GPS_PARSE_STATE_RTCM_CRC = 44,
-  
   GPS_PARSE_STATE_INVALID = UINT8_MAX
 } gps_parse_state_t;
 
@@ -105,5 +44,14 @@ typedef union {
     uint16_t msg_type;
   } rtcm;
 } gps_msg_t;
+
+typedef struct {
+  int (*init)(void);
+  int (*start)(void);
+  int (*stop)(void);
+  int (*reset)(void);
+  int (*send)(const char *data, size_t len);
+  int (*recv)(char *buf, size_t len);
+} gps_hal_ops_t;
 
 #endif
