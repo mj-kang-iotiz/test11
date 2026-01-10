@@ -1,390 +1,184 @@
+/**
+ * @file gps.c
+ * @brief GPS 초기화 및 태스크
+ */
+
 #include "gps.h"
 #include "gps_config.h"
-#include "parser.h"
+#include "gps_parser.h"
 #include <string.h>
 
 #ifndef TAG
-  #define TAG "GPS_PARSE"
+#define TAG "GPS"
 #endif
 
 #include "log.h"
 
-static inline void add_nmea_chksum(gps_t *gps, char ch);
-static inline uint8_t check_nmea_chksum(gps_t *gps);
-static inline void term_add(gps_t *gps, char ch);
-static inline void term_next(gps_t *gps);
+/*===========================================================================
+ * 내부 함수 선언
+ *===========================================================================*/
+static void gps_process_task(void *pvParameter);
 
-void _gps_gga_raw_add(gps_t *gps, char ch) {
-  if (gps->nmea_data.gga_raw_pos < 99) {
-    gps->nmea_data.gga_raw[gps->nmea_data.gga_raw_pos] = ch;
-    gps->nmea_data.gga_raw[++gps->nmea_data.gga_raw_pos] = '\0';
-  }
-}
+/*===========================================================================
+ * GPS 초기화
+ *===========================================================================*/
 
-
-/**
- * @brief NMEA 프로토콜 체크섬 추가
- *
- * @param[out] gps
- * @param[in] ch
- */
-static inline void add_nmea_chksum(gps_t *gps, char ch) {
-  gps->nmea.crc ^= (uint8_t)ch;
-}
-
-/**
- * @brief NMEA 프로토콜 체크섬 확인
- *
- * @param[in] gps
- * @return uint8_t 1: success 0: fail
- */
-static inline uint8_t check_nmea_chksum(gps_t *gps) {
-  uint8_t crc = 0;
-
-  crc = (uint8_t)((((PARSER_CHAR_HEX_TO_NUM(gps->nmea.term_str[0])) & 0x0FU)
-                   << 0x04U) |
-                  ((PARSER_CHAR_HEX_TO_NUM(gps->nmea.term_str[1])) & 0x0FU));
-
-  if (gps->nmea.crc != crc) {
-    return 0;
-  }
-
-  return 1;
-}
-
-/**
- * @brief 프로토콜 페이로드 추가
- *
- * @param[inout] gps
- * @param[in] ch
- */
-static inline void add_payload(gps_t *gps, char ch) {
-  if (gps->pos < GPS_PAYLOAD_SIZE - 1) {
-    gps->payload[gps->pos] = ch;
-    gps->payload[++gps->pos] = 0;
-  }
-}
-
-/**
- * @brief NMEA183 프로토콜 , 사이에 있는 문자 추가
- *
- * @param[inout] gps
- * @param[in] ch
- */
-static inline void term_add(gps_t *gps, char ch) {
-  if (gps->nmea.term_pos < GPS_NMEA_TERM_SIZE - 1) {
-    gps->nmea.term_str[gps->nmea.term_pos] = ch;
-    gps->nmea.term_str[++gps->nmea.term_pos] = 0;
-  }
-}
-
-/**
- * @brief NMEA183 프로토콜 , 파싱후 초기화
- *
- * @param[out] gps
- */
-static inline void term_next(gps_t *gps) {
-  gps->nmea.term_str[0] = 0;
-  gps->nmea.term_pos = 0;
-  gps->nmea.term_num++;
-}
-
-static inline void term_add_unicore(gps_t *gps, char ch) {
-  if (gps->unicore.term_pos < GPS_UNICORE_TERM_SIZE - 1) {
-    gps->unicore.term_str[gps->unicore.term_pos] = ch;
-    gps->unicore.term_str[++gps->unicore.term_pos] = 0;
-  }
-}
-
-/**
- * @brief UNICORE ASCII 프로토콜 , 파싱후 초기화
- *
- * @param[out] gps
- */
-static inline void term_next_unicore(gps_t *gps) {
-  gps->unicore.term_str[0] = 0;
-  gps->unicore.term_pos = 0;
-  gps->unicore.term_num++;
-}
-
-static inline void add_unicore_chksum(gps_t *gps, char ch) {
-  gps->unicore.crc ^= (uint8_t)ch;
-}
-
-static inline uint8_t check_unicore_chksum(gps_t *gps) {
-  uint8_t crc = 0;
-  crc = (uint8_t)((((PARSER_CHAR_HEX_TO_NUM(gps->unicore.term_str[0])) & 0x0FU)
-                   << 0x04U) |
-                  ((PARSER_CHAR_HEX_TO_NUM(gps->unicore.term_str[1])) & 0x0FU));
-
-  if (gps->unicore.crc != crc) {
-    return 0;
-  }
-
-  return 1;
-}
-
-/**
- * @brief gps 객체 초기화
- *
- * @param[out] gps
- */
 bool gps_init(gps_t *gps) {
-  memset(gps, 0, sizeof(*gps));
-  gps->pkt_queue = xQueueCreate(10, sizeof(uint8_t));
-  gps->mutex = xSemaphoreCreateMutex();
-  gps->cmd_sem = xSemaphoreCreateBinary();
+    if (!gps) {
+        LOG_ERR("GPS handle is NULL");
+        return false;
+    }
 
-  xTaskCreate(gps_process_task, "gps_pkt", 1024,
-                    (void*)gps,
-                    tskIDLE_PRIORITY + 1, &gps->pkt_task);
+    memset(gps, 0, sizeof(gps_t));
 
-  gps->is_running = true;
+    /* RX 링버퍼 초기화 */
+    ringbuffer_init(&gps->rx_buf, gps->rx_buf_mem, sizeof(gps->rx_buf_mem));
 
-  return true;
+    /* 파서 초기화 */
+    gps_parser_init(gps);
+
+    /* OS 객체 생성 */
+    gps->pkt_queue = xQueueCreate(10, sizeof(uint8_t));
+    if (!gps->pkt_queue) {
+        LOG_ERR("Failed to create pkt_queue");
+        return false;
+    }
+
+    gps->mutex = xSemaphoreCreateMutex();
+    if (!gps->mutex) {
+        LOG_ERR("Failed to create mutex");
+        return false;
+    }
+
+    gps->cmd_sem = xSemaphoreCreateBinary();
+    if (!gps->cmd_sem) {
+        LOG_ERR("Failed to create cmd_sem");
+        return false;
+    }
+
+    /* RX 태스크 생성 */
+    BaseType_t ret = xTaskCreate(
+        gps_process_task,
+        "gps_pkt",
+        1024,
+        (void*)gps,
+        tskIDLE_PRIORITY + 1,
+        &gps->pkt_task
+    );
+
+    if (ret != pdPASS) {
+        LOG_ERR("Failed to create gps_process_task");
+        return false;
+    }
+
+    gps->is_running = true;
+    LOG_INFO("GPS initialized");
+
+    return true;
 }
 
-/**
- * @brief GPS 프로토콜 파싱
- *
- * @param[inout] gps
- * @param[in] data
- * @param[in] len
- */
-void gps_parse_process(gps_t *gps, const void *data, size_t len) {
-  const uint8_t *d = data;
-
-  for (; len > 0; ++d, --len) {
-    /* @TODO GPS_PROTOCOL_NONE 일때 start 문자 찾는걸 만들고, 프로토콜에 따라
-     * 다르게 파싱하게끔 만들기 */
-    if (gps->protocol == GPS_PROTOCOL_NONE) {
-      if (*d == '$') {
-        memset(&gps->nmea, 0, sizeof(gps->nmea));
-
-        gps->protocol = GPS_PROTOCOL_NMEA;
-        gps->state = GPS_PARSE_STATE_NMEA_START;
-      } 
-      /* UBX binary */
-      else if (*d == 0xB5 && gps->state == GPS_PARSE_STATE_NONE) {
-        gps->state = GPS_PARSE_STATE_UBX_SYNC_1;
-      } 
-      else if (*d == 0x62 && gps->state == GPS_PARSE_STATE_UBX_SYNC_1) {
-        memset(&gps->ubx, 0, sizeof(gps->ubx));
-        gps->pos = 0;
-        gps->protocol = GPS_PROTOCOL_UBX;
-        gps->state = GPS_PARSE_STATE_UBX_SYNC_2;
-      } 
-      /* UNICORE binary */
-      else if(*d == 0xAA && gps->state == GPS_PARSE_STATE_NONE) {
-        gps->state = GPS_PARSE_STATE_UNICORE_SYNC1;
-        gps->pos = 0;
-        add_payload(gps, *d);
-      } else if(*d == 0x44 && gps->state == GPS_PARSE_STATE_UNICORE_SYNC1) {
-        gps->state = GPS_PARSE_STATE_UNICORE_SYNC2;
-        add_payload(gps, *d);
-      } else if(*d == 0xB5 && gps->state == GPS_PARSE_STATE_UNICORE_SYNC2) {
-        memset(&gps->unicore_bin, 0, sizeof(gps->unicore_bin));
-        add_payload(gps, *d);
-
-        gps->protocol = GPS_PROTOCOL_UNICORE_BIN;
-        gps->state = GPS_PARSE_STATE_UNICORE_SYNC3;
-      }
-      /* RTCM3 */
-      else if(*d == 0xD3 && gps->state == GPS_PARSE_STATE_NONE) {
-        memset(&gps->rtcm, 0, sizeof(gps->rtcm));
-        gps->pos = 0;
-        add_payload(gps, *d);
-        gps->protocol = GPS_PROTOCOL_RTCM;
-        gps->state = GPS_PARSE_STATE_RTCM_PREAMBLE;
-      }
-      /* 재시도 로직 */
-      else {
-        gps->state = GPS_PARSE_STATE_NONE;
-
-        if (*d == '$') {
-          memset(&gps->nmea, 0, sizeof(gps->nmea));
-          gps->protocol = GPS_PROTOCOL_NMEA;
-          gps->state = GPS_PARSE_STATE_NMEA_START;
-        } else if (*d == 0xD3) {
-          memset(&gps->rtcm, 0, sizeof(gps->rtcm));
-          gps->pos = 0;
-          add_payload(gps, *d);
-          gps->protocol = GPS_PROTOCOL_RTCM;
-          gps->state = GPS_PARSE_STATE_RTCM_PREAMBLE;
-        }else if (*d == 0xB5) {
-          gps->state = GPS_PARSE_STATE_UBX_SYNC_1;
-        } else if (*d == 0xAA) {
-          gps->state = GPS_PARSE_STATE_UNICORE_SYNC1;
-          gps->pos = 0;
-          add_payload(gps, *d);
-        }
-      }
-    } 
-    else if (gps->protocol == GPS_PROTOCOL_NMEA) {
-#if defined(USE_STORE_RAW_GGA)
-      if (gps->nmea.msg_type == GPS_NMEA_MSG_GGA) {
-        _gps_gga_raw_add(gps, *d);
-      }
-#endif
-
-      if (*d == ',') {
-            if (gps->nmea.term_num == 0 && strcmp(gps->nmea.term_str, "command") == 0) {
-
-            	memset(&gps->unicore, 0, sizeof(gps->unicore));
-            	gps->unicore.crc = gps->nmea.crc;
-            	memset(&gps->nmea, 0, sizeof(gps->nmea));
-              gps->protocol = GPS_PROTOCOL_UNICORE;
-              gps->state = GPS_PARSE_STATE_UNICORE_START;
-              gps->unicore.msg_type = GPS_UNICORE_MSG_COMMAND;
-              add_unicore_chksum(gps, *d);
-              term_next_unicore(gps);
-            } else {
-              gps_parse_nmea_term(gps);
-              add_nmea_chksum(gps, *d);
-              term_next(gps);
-            }
-      }
-      else if (*d == '*') {
-        gps_parse_nmea_term(gps);
-        gps->nmea.star = 1;
-        term_next(gps);
-
-        gps->state = GPS_PARSE_STATE_NMEA_CHKSUM;
-      } else if (*d == '\r') {
-        if (check_nmea_chksum(gps)) {
-
-#if defined(USE_STORE_RAW_GGA)
-          if (gps->nmea.msg_type == GPS_NMEA_MSG_GGA) {
-            _gps_gga_raw_add(gps, *d);
-            _gps_gga_raw_add(gps, '\n');
-            gps->nmea_data.gga_is_rdy = true;
-          }
-#endif
-          gps_msg_t msg;
-          msg.nmea = gps->nmea.msg_type;
-          
-          if (gps->handler) {
-            gps->handler(gps, GPS_EVENT_DATA_PARSED, GPS_PROTOCOL_NMEA, msg);
-          }
-        }
-
-        gps->pos = 0;
-        gps->protocol = GPS_PROTOCOL_NONE;
-        gps->state = GPS_PARSE_STATE_NONE;
-      } else {
-        if (!gps->nmea.star) {
-          add_nmea_chksum(gps, *d);
-        }
-        term_add(gps, *d);
-      }
-    } else if (gps->protocol == GPS_PROTOCOL_UBX) {
-      add_payload(gps, *d);
-      gps_parse_ubx(gps);
-    } 
-    else if(gps->protocol == GPS_PROTOCOL_UNICORE)
-    {
-      if (*d == ',') {
-        gps_parse_unicore_term(gps);
-        
-        if (!gps->unicore.colon) {
-          add_unicore_chksum(gps, *d);
-        }
-        term_next_unicore(gps);
-      }
-      else if (*d == ':') {
-        // ':' 이후는 값이므로 CRC에 포함하지 않음
-        gps->unicore.colon = 1;
-        add_unicore_chksum(gps, *d);  // ':' 자체는 CRC에 포함
-        term_add_unicore(gps, *d);
-      }
-      else if (*d == '*') {
-        gps_parse_unicore_term(gps);
-        gps->unicore.star = 1;
-        term_next_unicore(gps);
-        gps->state = GPS_PARSE_STATE_UNICORE_CHKSUM;
-      } else if (*d == '\r') {
-        if (check_unicore_chksum(gps)) {
-          gps_msg_t msg;
-          msg.unicore.response = gps->unicore.response;
-
-          if (gps->handler) {
-            gps->handler(gps, GPS_EVENT_DATA_PARSED, gps->protocol, msg);
-          }
-        }
-
-        memset(&gps->unicore, 0, sizeof(gps->unicore));
-        memset(gps->payload, 0, sizeof(gps->payload));
-        gps->protocol = GPS_PROTOCOL_NONE;
-        gps->state = GPS_PARSE_STATE_NONE;
-      } else {
-        if (!gps->unicore.star && !gps->unicore.colon) {
-          add_unicore_chksum(gps, *d);
-        }
-
-        term_add_unicore(gps, *d);
-      }
-    }
-    else if( gps->protocol == GPS_PROTOCOL_UNICORE_BIN)
-    {
-      add_payload(gps, *d);
-      gps_parse_unicore_bin(gps);
-    }
-    else if (gps->protocol == GPS_PROTOCOL_RTCM) {
-      add_payload(gps, *d);
-      if (gps->state == GPS_PARSE_STATE_RTCM_PREAMBLE) {
-    	gps->rtcm.msg_len = (*d & 0x03) << 8;
-        gps->state = GPS_PARSE_STATE_RTCM_LEN_1;
-      }
-      else if (gps->state == GPS_PARSE_STATE_RTCM_LEN_1) {
-        gps->rtcm.msg_len |= *d;
-        gps->rtcm.total_len = 3 + gps->rtcm.msg_len + 3;  // 헤더(3) + 페이로드 + CRC(3)
-        gps->rtcm.payload_cnt = 0;
-        gps->state = GPS_PARSE_STATE_RTCM_PAYLOAD;
-      }
-      else if (gps->state == GPS_PARSE_STATE_RTCM_PAYLOAD) {
-        gps->rtcm.payload_cnt++;
-        if (gps->rtcm.payload_cnt == 1) {
-          gps->rtcm.msg_type = (*d) << 4;
-        }
-        else if (gps->rtcm.payload_cnt == 2) {
-          gps->rtcm.msg_type |= ((*d) >> 4) & 0x0F;
-        }
-
-        if (gps->pos >= gps->rtcm.total_len) {
-          gps_msg_t msg;
-          msg.rtcm.msg_type = gps->rtcm.msg_type;
-          if (gps->handler) {
-            gps->handler(gps, GPS_EVENT_DATA_PARSED, GPS_PROTOCOL_RTCM, msg);
-          }
-
-          memset(&gps->rtcm, 0, sizeof(gps->rtcm));
-          memset(gps->payload, 0, sizeof(gps->payload));
-          gps->protocol = GPS_PROTOCOL_NONE;
-          gps->state = GPS_PARSE_STATE_NONE;
-        }
-      }
-    }
-  }
-}
+/*===========================================================================
+ * 이벤트 핸들러 설정
+ *===========================================================================*/
 
 void gps_set_evt_handler(gps_t *gps, gps_evt_handler handler) {
-  if (handler) {
-    gps->handler = handler;
-  }
+    if (gps && handler) {
+        gps->handler = handler;
+    }
 }
 
+/*===========================================================================
+ * 동기 명령어 전송
+ *===========================================================================*/
+
+bool gps_send_cmd_sync(gps_t *gps, const char *cmd, uint32_t timeout_ms) {
+    if (!gps || !cmd || !gps->ops || !gps->ops->send) {
+        LOG_ERR("Invalid parameters");
+        return false;
+    }
+
+    /* 세마포어 비우기 (이전 잔여 시그널 제거) */
+    xSemaphoreTake(gps->cmd_sem, 0);
+
+    /* 응답 대기 상태 설정 */
+    gps->parser_ctx.cmd_ctx.waiting = true;
+    gps->parser_ctx.cmd_ctx.result_ok = false;
+
+    /* 명령어 전송 */
+    size_t cmd_len = strlen(cmd);
+    gps->ops->send(cmd, cmd_len);
+    gps->ops->send("\r\n", 2);
+
+    LOG_DEBUG("CMD TX: %s", cmd);
+
+    /* 응답 대기 */
+    BaseType_t got = xSemaphoreTake(gps->cmd_sem, pdMS_TO_TICKS(timeout_ms));
+
+    /* 정리 */
+    gps->parser_ctx.cmd_ctx.waiting = false;
+
+    if (got != pdTRUE) {
+        LOG_WARN("CMD timeout: %s", cmd);
+        return false;
+    }
+
+    LOG_DEBUG("CMD response: %s", gps->parser_ctx.cmd_ctx.result_ok ? "OK" : "ERROR");
+    return gps->parser_ctx.cmd_ctx.result_ok;
+}
+
+/*===========================================================================
+ * GPS 패킷 처리 태스크
+ *===========================================================================*/
 
 static void gps_process_task(void *pvParameter) {
-  gps_t *inst = (gps_t *)pvParameter;
+    gps_t *gps = (gps_t *)pvParameter;
+    uint8_t dummy;
 
-  inst->is_alive = true;
-  
-  while (1) {
-    xQueueReceive(inst->pkt_queue, &dummy, portMAX_DELAY);
-    
-    
-  }
+    gps->is_alive = true;
+    LOG_INFO("GPS process task started");
 
-  inst->is_alive = false;
-  vTaskDelete(NULL);
+    while (gps->is_running) {
+        /* RX 신호 대기 (UART ISR에서 queue send) */
+        if (xQueueReceive(gps->pkt_queue, &dummy, pdMS_TO_TICKS(1000)) == pdTRUE) {
+            /* 새 파서로 패킷 파싱 */
+            gps_parser_process(gps);
+        }
+
+        /* 주기적 타임아웃 체크 (optional) */
+        /* 여기서 불완전 패킷 타임아웃 처리 등 추가 가능 */
+    }
+
+    gps->is_alive = false;
+    LOG_INFO("GPS process task stopped");
+    vTaskDelete(NULL);
 }
+
+/*===========================================================================
+ * 레거시 API (deprecated - 기존 코드 호환용)
+ *
+ * 기존 바이트 단위 파싱은 더 이상 사용하지 않음.
+ * 새 파서(gps_parser_process)는 ringbuffer 기반으로 동작.
+ *===========================================================================*/
+
+void gps_parse_process(gps_t *gps, const void *data, size_t len) {
+    /* deprecated: 이 함수는 더 이상 사용하지 않음
+     * 대신 UART ISR에서 ringbuffer_write() 후 queue send
+     * 그러면 gps_process_task에서 gps_parser_process() 호출
+     */
+    (void)gps;
+    (void)data;
+    (void)len;
+    LOG_WARN("gps_parse_process is deprecated, use ringbuffer + gps_parser_process");
+}
+
+/*===========================================================================
+ * GGA Raw 저장 (레거시 호환용)
+ *===========================================================================*/
+#if defined(USE_STORE_RAW_GGA)
+void _gps_gga_raw_add(gps_t *gps, char ch) {
+    if (gps->nmea_data.gga_raw_pos < sizeof(gps->nmea_data.gga_raw) - 1) {
+        gps->nmea_data.gga_raw[gps->nmea_data.gga_raw_pos] = ch;
+        gps->nmea_data.gga_raw[++gps->nmea_data.gga_raw_pos] = '\0';
+    }
+}
+#endif
