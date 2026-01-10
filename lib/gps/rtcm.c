@@ -328,7 +328,10 @@ parse_result_t rtcm_try_parse(gps_t *gps, ringbuffer_t *rb) {
 
     /* 10. 이벤트 핸들러 호출 (URC) */
     if (gps->handler) {
-        gps_msg_t msg = { .rtcm.msg_type = msg_type };
+        gps_msg_t msg = {
+            .timestamp_ms = xTaskGetTickCount(),
+            .rtcm.msg_type = msg_type
+        };
         gps->handler(gps, GPS_EVENT_DATA_PARSED, GPS_PROTOCOL_RTCM, msg);
     }
 

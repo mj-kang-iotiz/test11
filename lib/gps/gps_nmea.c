@@ -99,20 +99,7 @@ parse_result_t nmea_try_parse(gps_t *gps, ringbuffer_t *rb) {
             LOG_WARN("NMEA packet too long without \\r, dropping");
             return PARSE_INVALID;
         }
-
-        /* 타임아웃 체크 (마지막 수신 후 1초) */
-        uint32_t now = xTaskGetTickCount();
-        if (gps->parser_ctx.stats.last_rx_tick != 0) {
-            uint32_t elapsed = now - gps->parser_ctx.stats.last_rx_tick;
-            if (elapsed > pdMS_TO_TICKS(1000)) {
-                /* 1초 이상 '\r' 안옴 - 버퍼 비우기 */
-                LOG_WARN("NMEA packet timeout, clearing buffer");
-                ringbuffer_reset(rb);
-                gps->parser_ctx.stats.rx_timeout_cnt++;
-                return PARSE_INVALID;
-            }
-        }
-
+        /* 데이터 부족, 더 기다림 */
         return PARSE_NEED_MORE;
     }
 
@@ -162,7 +149,10 @@ parse_result_t nmea_try_parse(gps_t *gps, ringbuffer_t *rb) {
 
     /* URC이면 이벤트 핸들러 호출 */
     if (nmea_msg_table[msg_idx].is_urc && gps->handler) {
-        gps_msg_t msg = { .nmea = msg_id };
+        gps_msg_t msg = {
+            .timestamp_ms = xTaskGetTickCount(),
+            .nmea = msg_id
+        };
         gps->handler(gps, GPS_EVENT_DATA_PARSED, GPS_PROTOCOL_NMEA, msg);
     }
 

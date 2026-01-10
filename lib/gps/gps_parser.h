@@ -73,7 +73,6 @@ typedef struct {
     uint32_t last_rx_tick;        /**< 마지막 수신 tick (xTaskGetTickCount) */
     uint32_t last_nmea_tick;      /**< 마지막 NMEA 수신 tick */
     uint32_t last_rtcm_tick;      /**< 마지막 RTCM 수신 tick */
-    uint32_t rx_timeout_cnt;      /**< 수신 타임아웃 횟수 */
 } gps_parser_stats_t;
 
 /*===========================================================================

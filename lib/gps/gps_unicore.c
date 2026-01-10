@@ -163,7 +163,10 @@ parse_result_t unicore_ascii_try_parse(gps_t *gps, ringbuffer_t *rb) {
 
     /* 9. 이벤트 핸들러 호출 */
     if (gps->handler) {
-        gps_msg_t msg = { .unicore.response = resp };
+        gps_msg_t msg = {
+            .timestamp_ms = xTaskGetTickCount(),
+            .unicore.response = resp
+        };
         gps->handler(gps, GPS_EVENT_CMD_RESPONSE, GPS_PROTOCOL_UNICORE_CMD, msg);
     }
 
@@ -257,7 +260,10 @@ parse_result_t unicore_bin_try_parse(gps_t *gps, ringbuffer_t *rb) {
 
     /* 11. 이벤트 핸들러 호출 (URC) */
     if (gps->handler) {
-        gps_msg_t msg = { .unicore_bin.msg = msg_id };
+        gps_msg_t msg = {
+            .timestamp_ms = xTaskGetTickCount(),
+            .unicore_bin.msg = msg_id
+        };
         gps->handler(gps, GPS_EVENT_DATA_PARSED, GPS_PROTOCOL_UNICORE_BIN, msg);
     }
 

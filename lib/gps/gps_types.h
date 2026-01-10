@@ -28,21 +28,27 @@ typedef enum {
   GPS_NMEA_MSG_INVALID = UINT8_MAX
 } gps_nmea_msg_t;
 
-typedef union {
-  gps_nmea_msg_t nmea;
-  struct {
-    uint8_t class;
-    uint8_t id;
-  } ubx;
-  struct {
-    uint16_t msg;
-  } unicore_bin;
-  struct {
-    uint8_t response;
-  } unicore;
-  struct {
-    uint16_t msg_type;
-  } rtcm;
+/**
+ * @brief GPS 메시지 정보 (이벤트 핸들러용)
+ */
+typedef struct {
+  uint32_t timestamp_ms;  /**< 수신 시간 (xTaskGetTickCount) */
+  union {
+    gps_nmea_msg_t nmea;
+    struct {
+      uint8_t class;
+      uint8_t id;
+    } ubx;
+    struct {
+      uint16_t msg;
+    } unicore_bin;
+    struct {
+      uint8_t response;
+    } unicore;
+    struct {
+      uint16_t msg_type;
+    } rtcm;
+  };
 } gps_msg_t;
 
 typedef struct {
