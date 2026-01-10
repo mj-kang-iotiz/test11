@@ -10,7 +10,6 @@
 #include "stm32f4xx_ll_system.h"
 #include "stm32f4xx_ll_usart.h"
 #include "stm32f4xx_ll_utils.h"
-#include "f9p_baudrate_config.h"
 
 #ifndef TAG
 #define TAG "GPS_PORT"
@@ -21,8 +20,8 @@
 static char gps_recv_buf[GPS_CNT][2048];
 static QueueHandle_t gps_queues[GPS_CNT] = {NULL};
 
-static gps_type_t uart2_gps_type = GPS_TYPE_F9P;
-static gps_type_t uart4_gps_type = GPS_TYPE_F9P;
+static gps_type_t uart2_gps_type = GPS_TYPE_UM982;
+static gps_type_t uart4_gps_type = GPS_TYPE_UM982;
 static gps_id_t uart2_gps_id = GPS_ID_BASE;
 static gps_id_t uart4_gps_id = GPS_ID_ROVER;
 
@@ -89,15 +88,7 @@ static void gps_uart2_init(void)
   /* USER CODE BEGIN USART2_Init 1 */
 
   /* USER CODE END USART2_Init 1 */
-  const board_config_t *config = board_get_config();
-  if(config->board == BOARD_TYPE_ROVER_F9P || config->board == BOARD_TYPE_BASE_F9P)
-  {
-    USART_InitStruct.BaudRate = 38400;
-  }
-  else
-  {
-    USART_InitStruct.BaudRate = 115200;
-  }
+  USART_InitStruct.BaudRate = 115200;
   USART_InitStruct.DataWidth = LL_USART_DATAWIDTH_8B;
   USART_InitStruct.StopBits = LL_USART_STOPBITS_1;
   USART_InitStruct.Parity = LL_USART_PARITY_NONE;
@@ -135,17 +126,6 @@ int gps_rtk_uart2_init(void)
 {
   gps_uart2_dma_init();
   gps_uart2_init();
-
-  const board_config_t *config = board_get_config();
-  if(config->board == BOARD_TYPE_ROVER_F9P || config->board == BOARD_TYPE_BASE_F9P)
-  {
-    // F9P 보드일 경우 보드레이트를 115200으로 변경 (DMA 활성화 전)
-    LOG_INFO("Changing F9P UART1 baudrate to 115200...");
-    gps_rtk_gpio_start();
-    LL_USART_Enable(USART2);
-    f9p_init_uart1_baudrate_115200();
-    LL_USART_Disable(USART2);
-  }
 
   return 0;
 }
@@ -283,22 +263,10 @@ int gps_port_init_instance(gps_t *gps_handle, gps_id_t id, gps_type_t type)
   const board_config_t *config = board_get_config();
 
   LOG_INFO("GPS[%d] Port 초기화 시작 (보드: %d, GPS 타입: %s)", id,
-           config->board, type == GPS_TYPE_F9P ? "F9P" : "UM982");
+           config->board, type == GPS_TYPE_UM982 ? "UM982" : "UNKNOWN");
 
   if (config->board == BOARD_TYPE_BASE_UM982 ||
-      config->board == BOARD_TYPE_BASE_F9P)
-  {
-    // Base 보드: 항상 USART2
-    uart2_gps_type = type;
-    uart2_gps_id = id;
-    gps_handle->ops = &gps_rtk_uart2_ops;
-    if (gps_handle->ops->init)
-    {
-      gps_handle->ops->init();
-    }
-    LOG_INFO("GPS[%d] USART2 할당 및 초기화 완료", id);
-  }
-  else if (config->board == BOARD_TYPE_ROVER_UM982)
+      config->board == BOARD_TYPE_ROVER_UM982)
   {
     uart2_gps_type = type;
     uart2_gps_id = id;
@@ -308,33 +276,6 @@ int gps_port_init_instance(gps_t *gps_handle, gps_id_t id, gps_type_t type)
       gps_handle->ops->init();
     }
     LOG_INFO("GPS[%d] USART2 할당 및 초기화 완료", id);
-  }
-  else if (config->board == BOARD_TYPE_ROVER_F9P)
-  {
-    // Rover Ublox: 첫 번째는 USART2, 두 번째는 UART4
-    if (id == GPS_ID_BASE)
-    {
-      uart2_gps_type = type;
-      uart2_gps_id = id;
-      gps_handle->ops = &gps_rtk_uart2_ops;
-      if (gps_handle->ops->init)
-      {
-        gps_handle->ops->init();
-      }
-      LOG_INFO("GPS[%d] USART2 할당 및 초기화 완료 (Rover F9P 첫 번째)", id);
-    }
-    else if (id == GPS_ID_ROVER)
-    {
-      uart4_gps_type = type;
-      uart4_gps_id = id;
-      gps_handle->ops = &gps_rtk_uart4_ops;
-      if (gps_handle->ops->init)
-      {
-        gps_handle->ops->init();
-      }
-      LOG_INFO("GPS[%d] UART4 할당 및 초기화 완료 (Rover F9P 두 번째)",
-               id);
-    }
   }
 
   return 0;
@@ -395,16 +336,7 @@ static void gps_uart4_init(void)
   /* USER CODE BEGIN UART4_Init 1 */
 
   /* USER CODE END UART4_Init 1 */
-  const board_config_t *config = board_get_config();
-  if(config->board == BOARD_TYPE_ROVER_F9P || config->board == BOARD_TYPE_BASE_F9P)
-  {
-    USART_InitStruct.BaudRate = 38400;
-  }
-  else
-  {
-    USART_InitStruct.BaudRate = 115200;
-  }
-  
+  USART_InitStruct.BaudRate = 115200;
   USART_InitStruct.DataWidth = LL_USART_DATAWIDTH_8B;
   USART_InitStruct.StopBits = LL_USART_STOPBITS_1;
   USART_InitStruct.Parity = LL_USART_PARITY_NONE;
@@ -434,21 +366,6 @@ int gps_rtk_uart4_init(void)
 {
   gps_uart4_dma_init();
   gps_uart4_init();
-
-  const board_config_t *config = board_get_config();
-
-  if(config->board == BOARD_TYPE_ROVER_F9P || config->board == BOARD_TYPE_BASE_F9P)
-
-  {
-
-    // F9P 보드일 경우 보드레이트를 115200으로 변경 (DMA 활성화 전)
-
-    LOG_INFO("Changing F9P UART2 baudrate to 115200...");
-    gps_rtk_uart4_gpio_start();
-    LL_USART_Enable(UART4);
-    f9p_init_rover_uart1_baudrate_115200();
-    LL_USART_Disable(UART4);
-  }
 
   return 0;
 }
@@ -638,169 +555,32 @@ void gps_port_set_queue(gps_id_t id, QueueHandle_t queue)
 }
 
 void gps_port_cleanup_instance(gps_id_t id)
-
 {
-
   if (id >= GPS_CNT)
-
     return;
-
- 
 
   const board_config_t *config = board_get_config();
 
- 
-
   LOG_INFO("GPS[%d] Port 정리 시작", id);
 
- 
-
   if (config->board == BOARD_TYPE_BASE_UM982 ||
-
-      config->board == BOARD_TYPE_BASE_F9P)
-
+      config->board == BOARD_TYPE_ROVER_UM982)
   {
-
     if (id == GPS_ID_BASE && uart2_gps_id == id)
-
     {
-
       LL_USART_Disable(USART2);
-
       LL_DMA_DisableStream(DMA1, LL_DMA_STREAM_5);
-
       LL_USART_DisableDMAReq_RX(USART2);
-
       LL_USART_DisableIT_IDLE(USART2);
-
       LL_USART_DisableIT_PE(USART2);
-
       LL_USART_DisableIT_ERROR(USART2);
-
       NVIC_DisableIRQ(USART2_IRQn);
-
       NVIC_DisableIRQ(DMA1_Stream5_IRQn);
-
- 
 
       HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_RESET);
 
- 
-
       gps_queues[id] = NULL;
-
       LOG_INFO("GPS[%d] USART2 정리 완료", id);
-
     }
-
   }
-
-  else if (config->board == BOARD_TYPE_ROVER_UM982)
-
-  {
-
-    if (id == GPS_ID_BASE && uart2_gps_id == id)
-
-    {
-
-      LL_USART_Disable(USART2);
-
-      LL_DMA_DisableStream(DMA1, LL_DMA_STREAM_5);
-
-      LL_USART_DisableDMAReq_RX(USART2);
-
-      LL_USART_DisableIT_IDLE(USART2);
-
-      LL_USART_DisableIT_PE(USART2);
-
-      LL_USART_DisableIT_ERROR(USART2);
-
-      NVIC_DisableIRQ(USART2_IRQn);
-
-      NVIC_DisableIRQ(DMA1_Stream5_IRQn);
-
- 
-
-      HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_RESET);
-
- 
-
-      gps_queues[id] = NULL;
-
-      LOG_INFO("GPS[%d] USART2 정리 완료", id);
-
-    }
-
-  }
-
-  else if (config->board == BOARD_TYPE_ROVER_F9P)
-
-  {
-
-    if (id == GPS_ID_BASE && uart2_gps_id == id)
-
-    {
-
-      LL_USART_Disable(USART2);
-
-      LL_DMA_DisableStream(DMA1, LL_DMA_STREAM_5);
-
-      LL_USART_DisableDMAReq_RX(USART2);
-
-      LL_USART_DisableIT_IDLE(USART2);
-
-      LL_USART_DisableIT_PE(USART2);
-
-      LL_USART_DisableIT_ERROR(USART2);
-
-      NVIC_DisableIRQ(USART2_IRQn);
-
-      NVIC_DisableIRQ(DMA1_Stream5_IRQn);
-
- 
-
-      HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_RESET);
-
- 
-
-      gps_queues[id] = NULL;
-
-      LOG_INFO("GPS[%d] USART2 정리 완료", id);
-
-    }
-
-    else if (id == GPS_ID_ROVER && uart4_gps_id == id)
-
-    {
-
-      LL_USART_Disable(UART4);
-
-      LL_DMA_DisableStream(DMA1, LL_DMA_STREAM_2);
-
-      LL_USART_DisableDMAReq_RX(UART4);
-
-      LL_USART_DisableIT_IDLE(UART4);
-
-      LL_USART_DisableIT_PE(UART4);
-
-      LL_USART_DisableIT_ERROR(UART4);
-
-      NVIC_DisableIRQ(UART4_IRQn);
-
-      NVIC_DisableIRQ(DMA1_Stream2_IRQn);
-
- 
-
-      HAL_GPIO_WritePin(GPIOA, GPIO_PIN_8, GPIO_PIN_RESET);
-
- 
-
-      gps_queues[id] = NULL;
-
-      LOG_INFO("GPS[%d] UART4 정리 완료", id);
-
-    }
-
-  }
-
 }

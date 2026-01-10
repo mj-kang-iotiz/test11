@@ -23,7 +23,44 @@
 #define GPS_UART_MAX_RECV_SIZE 2048
 
 #define GGA_AVG_SIZE 1
-#define HP_AVG_SIZE 1
+
+// GPS App 이벤트 타입 (RX 태스크 → App 태스크 전달용)
+typedef enum {
+  GPS_APP_EVT_NONE = 0,
+  GPS_APP_EVT_NMEA_GGA,
+  GPS_APP_EVT_NMEA_RMC,
+  GPS_APP_EVT_NMEA_THS,
+  GPS_APP_EVT_UNICORE_RESPONSE,
+  GPS_APP_EVT_UNICORE_BIN_BESTNAV,
+  GPS_APP_EVT_RTCM,
+} gps_app_evt_type_t;
+
+typedef struct {
+  gps_app_evt_type_t type;
+  gps_id_t id;
+  union {
+    struct {
+      gps_fix_t fix;
+      bool gga_is_rdy;
+      char gga_raw[100];
+      uint8_t gga_raw_pos;
+    } gga;
+    struct {
+      gps_unicore_resp_t response;
+    } unicore_resp;
+    struct {
+      double lat;
+      double lon;
+      double height;
+      double geoid;
+    } bestnav;
+    struct {
+      uint16_t msg_type;
+      uint8_t payload[GPS_PAYLOAD_SIZE];
+      uint16_t payload_len;
+    } rtcm;
+  } data;
+} gps_app_event_t;
 
 static bool gps_init_um982_base_fixed_async_internal(gps_id_t id, double lat, double lon, double alt,
 
@@ -36,8 +73,15 @@ static bool gps_init_um982_base_surveyin_async_internal(gps_id_t id, uint32_t ti
 
 typedef struct {
   gps_t gps;
-  QueueHandle_t queue;
-  TaskHandle_t task;
+
+  // RX 태스크 (파싱만)
+  QueueHandle_t rx_queue;      // UART IDLE 인터럽트 신호용
+  TaskHandle_t rx_task;
+
+  // App 태스크 (이벤트 핸들링)
+  QueueHandle_t app_queue;     // 이벤트 전달용
+  TaskHandle_t app_task;
+
   gps_type_t type;
   gps_id_t id;
   bool enabled;
@@ -54,9 +98,11 @@ typedef struct {
     bool can_read;
   } gga_avg_data;
 
-  QueueHandle_t cmd_queue;
-  TaskHandle_t tx_task;
-  gps_cmd_request_t *current_cmd_req;
+  // 동기식 명령어 전송용
+  SemaphoreHandle_t tx_mutex;
+  SemaphoreHandle_t response_sem;
+  volatile bool waiting_response;
+  volatile bool response_ok;
 
   gps_fix_t last_fix;
   uint8_t gga_ntrip_counter;
@@ -106,78 +152,6 @@ void _add_gga_avg_data(gps_instance_t *inst, double lat, double lon,
   }
 }
 
-void _add_hp_avg_data(gps_instance_t *inst) {
-  gps_t *gps = &inst->gps;
-  uint8_t pos = inst->ubx_hp_avg.pos;
-  gps_ubx_nav_hpposllh_t *data = &gps->ubx_data.hpposllh;
-  ubx_hp_avg_data_t *avg_data = &inst->ubx_hp_avg;
-
-  int64_t lat_sum = 0, lon_sum = 0, height_sum = 0, msl_sum = 0;
-  int16_t lat_hp_sum = 0, lon_hp_sum = 0, height_hp_sum = 0, msl_hp_sum = 0;
-
-  avg_data->lon[pos] = data->lon;
-  avg_data->lat[pos] = data->lat;
-  avg_data->height[pos] = data->height;
-  avg_data->msl[pos] = data->msl;
-  avg_data->lon_hp[pos] = data->lon_hp;
-  avg_data->lat_hp[pos] = data->lat_hp;
-  avg_data->height_hp[pos] = data->height_hp;
-  avg_data->msl_hp[pos] = data->msl_hp;
-  avg_data->hacc = data->hacc;
-  avg_data->vacc = data->vacc;
-
-  avg_data->pos = (avg_data->pos + 1) % HP_AVG_SIZE;
-
-  if (avg_data->len < HP_AVG_SIZE) {
-    avg_data->len++;
-
-    if (avg_data->len == HP_AVG_SIZE) {
-      for (int i = 0; i < HP_AVG_SIZE; i++) {
-        lon_sum += avg_data->lon[i];
-        lat_sum += avg_data->lat[i];
-        height_sum += avg_data->height[i];
-        msl_sum += avg_data->msl[i];
-        lon_hp_sum += avg_data->lon_hp[i];
-        lat_hp_sum += avg_data->lat_hp[i];
-        height_hp_sum += avg_data->height_hp[i];
-        msl_hp_sum += avg_data->msl_hp[i];
-      }
-
-      avg_data->lon_avg = (lon_sum / (double)HP_AVG_SIZE) +
-                          (lon_hp_sum / (double)HP_AVG_SIZE / (double)100);
-      avg_data->lat_avg = (lat_sum / (double)HP_AVG_SIZE) +
-                          (lat_hp_sum / (double)HP_AVG_SIZE / (double)100);
-      avg_data->height_avg = (height_sum / (double)HP_AVG_SIZE) +
-                             (height_hp_sum / (double)HP_AVG_SIZE / (double)10);
-      avg_data->msl_avg = (msl_sum / (double)HP_AVG_SIZE) +
-                          (msl_hp_sum / (double)HP_AVG_SIZE / (double)10);
-
-      avg_data->can_read = true;
-    }
-  } else if (avg_data->len == HP_AVG_SIZE) {
-    for (int i = 0; i < HP_AVG_SIZE; i++) {
-      lon_sum += avg_data->lon[i];
-      lat_sum += avg_data->lat[i];
-      height_sum += avg_data->height[i];
-      msl_sum += avg_data->msl[i];
-      lon_hp_sum += avg_data->lon_hp[i];
-      lat_hp_sum += avg_data->lat_hp[i];
-      height_hp_sum += avg_data->height_hp[i];
-      msl_hp_sum += avg_data->msl_hp[i];
-    }
-
-    avg_data->lon_avg = (lon_sum / (double)HP_AVG_SIZE) +
-                        (lon_hp_sum / (double)HP_AVG_SIZE / (double)100);
-    avg_data->lat_avg = (lat_sum / (double)HP_AVG_SIZE) +
-                        (lat_hp_sum / (double)HP_AVG_SIZE / (double)100);
-    avg_data->height_avg = (height_sum / (double)HP_AVG_SIZE) +
-                           (height_hp_sum / (double)HP_AVG_SIZE / (double)10);
-    avg_data->msl_avg = (msl_sum / (double)HP_AVG_SIZE) +
-                        (msl_hp_sum / (double)HP_AVG_SIZE / (double)10);
-  } else {
-    LOG_ERR("HP AVG LEN mismatch");
-  }
-}
 
 #define GPS_INIT_MAX_RETRY 3
 #define GPS_INIT_TIMEOUT_MS 1000
@@ -493,10 +467,15 @@ bool gps_init_um982_rover_async(gps_id_t id, gps_init_callback_t callback) {
   return true;
 }
 
+/**
+ * @brief GPS 이벤트 핸들러 (RX 태스크 컨텍스트에서 호출됨)
+ *
+ * 파싱 완료 이벤트를 app_queue로 전달
+ * 동기식 명령 응답은 직접 처리 (즉시 응답 필요)
+ */
 void gps_evt_handler(gps_t *gps, gps_event_t event, gps_protocol_t protocol,
                      gps_msg_t msg) {
   gps_instance_t *inst = NULL;
-  const board_config_t *config = board_get_config();
 
   for (uint8_t i = 0; i < GPS_CNT; i++) {
     if (gps_instances[i].enabled && &gps_instances[i].gps == gps) {
@@ -505,109 +484,60 @@ void gps_evt_handler(gps_t *gps, gps_event_t event, gps_protocol_t protocol,
     }
   }
 
-  if (!inst)
+  if (!inst || !inst->app_queue)
     return;
+
+  gps_app_event_t app_evt = {0};
+  app_evt.id = inst->id;
 
   switch (protocol) {
   case GPS_PROTOCOL_NMEA:
     if (msg.nmea == GPS_NMEA_MSG_GGA) {
-    	if(config->board == BOARD_TYPE_BASE_F9P || config->board == BOARD_TYPE_BASE_UM982)
-    	{
-          if (gps->nmea_data.gga.fix != inst->last_fix) {
-    	        base_auto_fix_on_gps_fix_changed(gps->nmea_data.gga.fix);
-    	        inst->last_fix = gps->nmea_data.gga.fix;
-    	    }
+      app_evt.type = GPS_APP_EVT_NMEA_GGA;
+      app_evt.data.gga.fix = gps->nmea_data.gga.fix;
+      app_evt.data.gga.gga_is_rdy = gps->nmea_data.gga_is_rdy;
+      if (gps->nmea_data.gga_is_rdy && gps->nmea_data.gga_raw_pos < sizeof(app_evt.data.gga.gga_raw)) {
+        memcpy(app_evt.data.gga.gga_raw, gps->nmea_data.gga_raw, gps->nmea_data.gga_raw_pos);
+        app_evt.data.gga.gga_raw_pos = gps->nmea_data.gga_raw_pos;
       }
-
-      if (gps->nmea_data.gga_is_rdy)
-      {
-        if(config->board == BOARD_TYPE_ROVER_F9P)
-        {
-          if(inst->id == GPS_ID_BASE)
-          {
-                  if(ntrip_gga_send_queue_initialized() && gps->nmea_data.gga.fix >= GPS_FIX_GPS)
-                  {
-                    ntrip_send_gga_data(gps->nmea_data.gga_raw,
-                                     gps->nmea_data.gga_raw_pos);
-                  }
-              
-
-          }
-        }
-        else
-        {
-            if(ntrip_gga_send_queue_initialized() && gps->nmea_data.gga.fix >= GPS_FIX_GPS)
-            {
-                ntrip_send_gga_data(gps->nmea_data.gga_raw,
-                                    gps->nmea_data.gga_raw_pos);
-            }
-        }
-      }
+      xQueueSend(inst->app_queue, &app_evt, 0);
     }
     break;
-
-  case GPS_PROTOCOL_UBX:
-    if (msg.ubx.id == GPS_UBX_NAV_ID_HPPOSLLH) {
-      if(config->board == BOARD_TYPE_BASE_F9P)
-      {
-        if (gps->nmea_data.gga.fix == GPS_FIX_RTK_FIX) {
-          // _add_hp_avg_data(inst);
-          double lat = gps->ubx_data.hpposllh.lat * 1e-7 + gps->ubx_data.hpposllh.lat_hp * 1e-9;
-          double lon = gps->ubx_data.hpposllh.lon * 1e-7 + gps->ubx_data.hpposllh.lon_hp * 1e-9;
-          double alt = (gps->ubx_data.hpposllh.height + gps->ubx_data.hpposllh.height * 1e-2)/(double)1000.0;
-          base_auto_fix_on_gga_update(lat, lon, alt);
-        }
-      }
-    }
 
   case GPS_PROTOCOL_UNICORE:
-    if (inst->current_cmd_req != NULL) {
+    // 동기식 명령어 응답은 즉시 처리 (세마포어 신호)
+    if (inst->waiting_response) {
       gps_unicore_resp_t resp = gps_get_unicore_response(gps);
       if (resp == GPS_UNICORE_RESP_OK) {
-        if (inst->current_cmd_req->is_async) {
-          inst->current_cmd_req->async_result = true;
-        } else {
-          *(inst->current_cmd_req->result) = true;
-        }
-        xSemaphoreGive(inst->current_cmd_req->response_sem);
+        inst->response_ok = true;
+        xSemaphoreGive(inst->response_sem);
       } else if (resp == GPS_UNICORE_RESP_ERROR || resp == GPS_UNICORE_RESP_UNKNOWN) {
-        if (inst->current_cmd_req->is_async) {
-          inst->current_cmd_req->async_result = false;
-        } else {
-          *(inst->current_cmd_req->result) = false;
-        }
-        xSemaphoreGive(inst->current_cmd_req->response_sem);
-      }
-    }
-
-    break;
-
-case GPS_PROTOCOL_UNICORE_BIN:
-    switch (msg.unicore_bin.msg) {
-      case GPS_UNICORE_BIN_MSG_BESTNAV: {
-        if(config->board == BOARD_TYPE_BASE_UM982)
-        {
-          if (gps->nmea_data.gga.fix == GPS_FIX_RTK_FIX)
-          {
-            hpd_unicore_bestnavb_t *bestnav = &gps->unicore_bin_data.bestnav;
-            base_auto_fix_on_gga_update(bestnav->lat, bestnav->lon, bestnav->height);
-          }
-        }
+        inst->response_ok = false;
+        xSemaphoreGive(inst->response_sem);
       }
     }
     break;
+
+  case GPS_PROTOCOL_UNICORE_BIN:
+    if (msg.unicore_bin.msg == GPS_UNICORE_BIN_MSG_BESTNAV) {
+      app_evt.type = GPS_APP_EVT_UNICORE_BIN_BESTNAV;
+      app_evt.data.bestnav.lat = gps->unicore_bin_data.bestnav.lat;
+      app_evt.data.bestnav.lon = gps->unicore_bin_data.bestnav.lon;
+      app_evt.data.bestnav.height = gps->unicore_bin_data.bestnav.height;
+      app_evt.data.bestnav.geoid = gps->unicore_bin_data.bestnav.geoid;
+      xQueueSend(inst->app_queue, &app_evt, 0);
+    }
+    break;
+
   case GPS_PROTOCOL_RTCM:
-    if(config->lora_mode == LORA_MODE_BASE)
-    {
-      if(gps->nmea_data.gga.fix == GPS_FIX_MANUAL_POS)
-      {
-        rtcm_send_to_lora(gps);
-      }
-      else if(config->board == BOARD_TYPE_BASE_F9P && gps->nmea_data.gga.hdop>=99.0)
-      {
-        rtcm_send_to_lora(gps);
-      }
+    app_evt.type = GPS_APP_EVT_RTCM;
+    app_evt.data.rtcm.msg_type = msg.rtcm.msg_type;
+    // RTCM 페이로드 복사 (필요시)
+    if (gps->pos < GPS_PAYLOAD_SIZE) {
+      memcpy(app_evt.data.rtcm.payload, gps->payload, gps->pos);
+      app_evt.data.rtcm.payload_len = gps->pos;
     }
+    xQueueSend(inst->app_queue, &app_evt, 0);
     break;
 
   default:
@@ -615,223 +545,29 @@ case GPS_PROTOCOL_UNICORE_BIN:
   }
 }
 
-static void gps_tx_task(void *pvParameter) {
-  gps_id_t id = (gps_id_t)(uintptr_t)pvParameter;
-  gps_instance_t *inst = &gps_instances[id];
-  gps_cmd_request_t cmd_req;
-
-  LOG_INFO("GPS TX 태스크[%d] 시작", id);
-
-  while (1) {
-    if (xQueueReceive(inst->cmd_queue, &cmd_req, portMAX_DELAY) == pdTRUE) {
-      LOG_INFO("GPS[%d] Sending command: %s", id, cmd_req.cmd);
-
-      // 현재 명령어 요청 저장 (RX Task에서 응답 처리용)
-      inst->current_cmd_req = &cmd_req;
-      if (cmd_req.is_async) {
-        cmd_req.async_result = false;
-      } else {
-        *(cmd_req.result) = false;
-      }
-
-      // 명령어 전송
-      if (inst->gps.ops && inst->gps.ops->send) {
-        xSemaphoreTake(inst->gps.mutex, pdMS_TO_TICKS(1000));
-        inst->gps.ops->send(cmd_req.cmd, strlen(cmd_req.cmd));
-        xSemaphoreGive(inst->gps.mutex);
-      } else {
-        LOG_ERR("GPS[%d] send ops not available", id);
-        inst->current_cmd_req = NULL;
-        if (cmd_req.is_async) {
-          cmd_req.async_result = false;
-          if (cmd_req.callback) {
-            cmd_req.callback(false, cmd_req.user_data);
-          }
-          vSemaphoreDelete(cmd_req.response_sem);
-        } else {
-          *(cmd_req.result) = false;
-          xSemaphoreGive(cmd_req.response_sem);
-        }
-        inst->current_cmd_req = NULL;
-        continue;
-      }
-
-      // 응답 대기 (타임아웃 적용)
-      if (xSemaphoreTake(cmd_req.response_sem, pdMS_TO_TICKS(cmd_req.timeout_ms)) == pdTRUE) {
-        // 응답 수신 완료 (RX Task가 세마포어를 줌)
-        if (cmd_req.is_async) {
-          LOG_INFO("GPS[%d] Response received: %s", id,
-                   cmd_req.async_result ? "OK" : "ERROR");
-        } else {
-          LOG_INFO("GPS[%d] Response received: %s", id,
-                   *(cmd_req.result) ? "OK" : "ERROR");
-        }
-      } else {
-        LOG_WARN("GPS[%d] Command timeout", id);
-        if (cmd_req.is_async) {
-          cmd_req.async_result = false;
-        } else {
-          *(cmd_req.result) = false;
-        }
-      }
-
-      // 현재 명령어 요청 초기화
-      inst->current_cmd_req = NULL;
-
-      // 비동기: 콜백 호출
-      if (cmd_req.is_async) {
-        if (cmd_req.callback) {
-          cmd_req.callback(cmd_req.async_result, cmd_req.user_data);
-        }
-
-        // 비동기는 세마포어를 TX Task에서 삭제
-        vSemaphoreDelete(cmd_req.response_sem);
-      } else {
-        // 동기: 외부 호출자에게 처리 완료 알림 (세마포어 반환)
-        xSemaphoreGive(cmd_req.response_sem);
-      }
-    }
-  }
-  vTaskDelete(NULL);
-}
-
-void callback_function(bool success, void *user_data) {
-    if (success) {
-       LOG_INFO(" 팩토리 리셋 성공");
-    } else {
-      LOG_ERR("팩토리 리셋 실패");
-    }
-}
-
-void base_station_cb(bool success, size_t failed_step, void *user_data)
-{
-  if(success)
-  {
-    LOG_INFO("UBX base설정 완료");
-    ble_send("Start Base manual\n\r", strlen("Start Base manual\n\r"), false);
-  }
-  else
-  {
-    LOG_ERR("UBX base 설정 실패 at step %d", failed_step);
-    ble_send("Base manual failed\n\r", strlen("Base manual failed\n\r"), false);
-  }
-}
 
 
-static void gps_process_task(void *pvParameter) {
+
+/**
+ * @brief GPS RX 태스크 (파싱만 담당)
+ *
+ * UART IDLE 인터럽트 신호를 받아 DMA 버퍼에서 데이터를 읽고 파싱
+ * 파싱 완료 시 이벤트 핸들러를 통해 app_queue로 이벤트 전달
+ */
+static void gps_rx_task(void *pvParameter) {
   gps_id_t id = (gps_id_t)(uintptr_t)pvParameter;
   gps_instance_t *inst = &gps_instances[id];
 
   size_t pos = 0;
   size_t old_pos = 0;
   uint8_t dummy = 0;
-  size_t total_received = 0;
 
   gps_set_evt_handler(&inst->gps, gps_evt_handler);
-  memset(&inst->gga_avg_data, 0, sizeof(inst->gga_avg_data));
-  memset(&inst->ubx_hp_avg, 0, sizeof(ubx_hp_avg_data_t));
 
-  bool use_led = (id == GPS_ID_BASE ? 1 : 0);
+  LOG_INFO("GPS[%d] RX 태스크 시작", id);
 
-  if (use_led) {
-    led_set_color(2, LED_COLOR_RED);
-    led_set_state(2, true);
-  }
-
-  vTaskDelay(pdMS_TO_TICKS(500));
-
-  // gps_factory_reset_async(id, callback_function, NULL);
-
-#if defined(BOARD_TYPE_BASE_UNICORE)
-  gps_init_um982_base_async(id, overall_init_complete);
-#elif defined(BOARD_TYPE_ROVER_UNICORE)
-  gps_init_um982_rover_async(id, overall_init_complete);
-#elif defined(BOARD_TYPE_BASE_UBLOX)
-  ubx_base_init(&inst->gps);
-#elif defined(BOARD_TYPE_ROVER_UBLOX)
-  if(id == GPS_ID_BASE)
-  {
-    ubx_moving_base_init(&inst->gps);
-  }
-  else if(id == GPS_ID_ROVER)
-  {
-    ubx_rover_init(&inst->gps);
-  }
-#endif
-  bool init_done = false;
-  const board_config_t *config = board_get_config();
-  
   while (1) {
-    ubx_init_async_process(&inst->gps);
-
-    if (!init_done) {
-            ubx_init_state_t state = ubx_init_async_get_state(&inst->gps);
-            if (state == UBX_INIT_STATE_DONE) {
-                printf("✓ UBX initialization completed!\n");
-                
-                if(config->board == BOARD_TYPE_BASE_F9P)
-                {
-                  user_params_t* params = flash_params_get_current();
-                  if(params->use_manual_position)
-                  {
-                    ubx_set_fixed_position_async(&inst->gps, params->lat, params->lon,
-                                                params->alt, base_station_cb, NULL);
-                  }
-                  else
-                  {
-                    // ubx_set_survey_in_mode_async(&inst->gps, 120, 50000, base_station_cb, NULL); // 120초 5m
-                  }
-                }
-                init_done = true;
-            } else if (state == UBX_INIT_STATE_ERROR) {
-                printf("✗ UBX initialization failed!\n");
-                init_done = true;
-            }
-    }
-
-    xQueueReceive(inst->queue, &dummy,
-                  portMAX_DELAY);
-
-    // base : quality 0,1,2 -> red, 4,5 -> yellow, 7 -> green, etc -> none
-    // rover : quality 0,1,2 -> red, 5 -> yellow, 4 -> green, etc -> none
-          	if(config->board == BOARD_TYPE_BASE_F9P && inst->gps.nmea_data.gga.hdop>=99.0)
-    	          {
-    	              led_set_color(2, LED_COLOR_GREEN);
-    	    	   }
-    else if (inst->gps.nmea_data.gga.fix <= GPS_FIX_DGPS) {
-      if (use_led) {
-        led_set_color(2, LED_COLOR_RED);
-      }
-    } else if (inst->gps.nmea_data.gga.fix == GPS_FIX_RTK_FLOAT) {
-      if (use_led) {
-        led_set_color(2, LED_COLOR_YELLOW);
-      }
-    } else if (inst->gps.nmea_data.gga.fix ==  GPS_FIX_RTK_FIX) {
-      if (use_led) {
-        if(config->board == BOARD_TYPE_ROVER_F9P || config->board == BOARD_TYPE_ROVER_UM982)
-        {
-            led_set_color(2, LED_COLOR_GREEN);
-        }
-        else if(config->board == BOARD_TYPE_BASE_F9P || config->board == BOARD_TYPE_BASE_UM982)
-        {
-            led_set_color(2, LED_COLOR_YELLOW);
-        }
-      }
-    } else if(inst->gps.nmea_data.gga.fix == GPS_FIX_MANUAL_POS)
-    {
-      if (use_led) {
-        led_set_color(2, LED_COLOR_GREEN);
-      }
-    }
-    else {
-      if (use_led) {
-        led_set_color(2, LED_COLOR_NONE);
-      }
-    }
-
-    if (use_led) {
-      led_set_toggle(2);
-    }
+    xQueueReceive(inst->rx_queue, &dummy, portMAX_DELAY);
 
     xSemaphoreTake(inst->gps.mutex, portMAX_DELAY);
     pos = gps_port_get_rx_pos(id);
@@ -840,21 +576,19 @@ static void gps_process_task(void *pvParameter) {
     if (pos != old_pos) {
       if (pos > old_pos) {
         size_t len = pos - old_pos;
-        total_received = len;
         LOG_DEBUG("[%d] %d received", id, (int)len);
         LOG_DEBUG_RAW("RAW: ", &gps_recv[old_pos], len);
-        gps_parse_process(&inst->gps, &gps_recv[old_pos], pos - old_pos);
+        gps_parse_process(&inst->gps, &gps_recv[old_pos], len);
       } else {
+        // wrap around
         size_t len1 = GPS_UART_MAX_RECV_SIZE - old_pos;
         size_t len2 = pos;
-        total_received = len1 + len2;
         LOG_DEBUG("[%d] %d received (wrap around)", id, (int)(len1 + len2));
         LOG_DEBUG_RAW("RAW: ", &gps_recv[old_pos], len1);
-        gps_parse_process(&inst->gps, &gps_recv[old_pos],
-                          GPS_UART_MAX_RECV_SIZE - old_pos);
-        if (pos > 0) {
+        gps_parse_process(&inst->gps, &gps_recv[old_pos], len1);
+        if (len2 > 0) {
           LOG_DEBUG_RAW("RAW: ", gps_recv, len2);
-          gps_parse_process(&inst->gps, gps_recv, pos);
+          gps_parse_process(&inst->gps, gps_recv, len2);
         }
       }
       old_pos = pos;
@@ -868,6 +602,114 @@ static void gps_process_task(void *pvParameter) {
   vTaskDelete(NULL);
 }
 
+/**
+ * @brief GPS App 태스크 (이벤트 핸들링 담당)
+ *
+ * app_queue에서 이벤트를 받아 처리
+ * - LED 상태 관리
+ * - NTRIP GGA 전송
+ * - Base Auto-Fix
+ * - RTCM to LoRa
+ * - 초기화 시퀀스
+ */
+static void gps_app_task(void *pvParameter) {
+  gps_id_t id = (gps_id_t)(uintptr_t)pvParameter;
+  gps_instance_t *inst = &gps_instances[id];
+  gps_app_event_t evt;
+
+  memset(&inst->gga_avg_data, 0, sizeof(inst->gga_avg_data));
+
+  bool use_led = (id == GPS_ID_BASE ? 1 : 0);
+  const board_config_t *config = board_get_config();
+
+  if (use_led) {
+    led_set_color(2, LED_COLOR_RED);
+    led_set_state(2, true);
+  }
+
+  LOG_INFO("GPS[%d] App 태스크 시작", id);
+
+  vTaskDelay(pdMS_TO_TICKS(500));
+
+  // GPS 초기화 시퀀스 시작
+#if defined(BOARD_TYPE_BASE_UNICORE)
+  gps_init_um982_base_async(id, overall_init_complete);
+#elif defined(BOARD_TYPE_ROVER_UNICORE)
+  gps_init_um982_rover_async(id, overall_init_complete);
+#endif
+
+  while (1) {
+    if (xQueueReceive(inst->app_queue, &evt, portMAX_DELAY) != pdTRUE) {
+      continue;
+    }
+
+    switch (evt.type) {
+    case GPS_APP_EVT_NMEA_GGA:
+      // LED 상태 관리
+      if (use_led) {
+        if (evt.data.gga.fix <= GPS_FIX_DGPS) {
+          led_set_color(2, LED_COLOR_RED);
+        } else if (evt.data.gga.fix == GPS_FIX_RTK_FLOAT) {
+          led_set_color(2, LED_COLOR_YELLOW);
+        } else if (evt.data.gga.fix == GPS_FIX_RTK_FIX) {
+          if (config->board == BOARD_TYPE_ROVER_UM982) {
+            led_set_color(2, LED_COLOR_GREEN);
+          } else if (config->board == BOARD_TYPE_BASE_UM982) {
+            led_set_color(2, LED_COLOR_YELLOW);
+          }
+        } else if (evt.data.gga.fix == GPS_FIX_MANUAL_POS) {
+          led_set_color(2, LED_COLOR_GREEN);
+        } else {
+          led_set_color(2, LED_COLOR_NONE);
+        }
+        led_set_toggle(2);
+      }
+
+      // Base Auto-Fix: fix 변경 감지
+      if (config->board == BOARD_TYPE_BASE_UM982) {
+        if (evt.data.gga.fix != inst->last_fix) {
+          base_auto_fix_on_gps_fix_changed(evt.data.gga.fix);
+          inst->last_fix = evt.data.gga.fix;
+        }
+      }
+
+      // NTRIP GGA 전송
+      if (evt.data.gga.gga_is_rdy) {
+        if (ntrip_gga_send_queue_initialized() && evt.data.gga.fix >= GPS_FIX_GPS) {
+          ntrip_send_gga_data(evt.data.gga.gga_raw, evt.data.gga.gga_raw_pos);
+        }
+      }
+      break;
+
+    case GPS_APP_EVT_UNICORE_BIN_BESTNAV:
+      // Base Auto-Fix: 위치 업데이트
+      if (config->board == BOARD_TYPE_BASE_UM982) {
+        if (inst->last_fix == GPS_FIX_RTK_FIX) {
+          base_auto_fix_on_gga_update(evt.data.bestnav.lat,
+                                       evt.data.bestnav.lon,
+                                       evt.data.bestnav.height);
+        }
+      }
+      break;
+
+    case GPS_APP_EVT_RTCM:
+      // RTCM to LoRa
+      if (config->lora_mode == LORA_MODE_BASE) {
+        if (inst->last_fix == GPS_FIX_MANUAL_POS) {
+          // RTCM 전송 시 gps 핸들 필요
+          rtcm_send_to_lora(&inst->gps);
+        }
+      }
+      break;
+
+    default:
+      break;
+    }
+  }
+
+  vTaskDelete(NULL);
+}
+
 void gps_init_all(void) {
   const board_config_t *config = board_get_config();
 
@@ -875,9 +717,7 @@ void gps_init_all(void) {
     gps_type_t type = config->gps[i];
 
     LOG_DEBUG("GPS[%d] 초기화 - 타입: %s", i,
-             type == GPS_TYPE_F9P     ? "F9P"
-             : type == GPS_TYPE_UM982 ? "UM982"
-                                      : "UNKNOWN");
+             type == GPS_TYPE_UM982 ? "UM982" : "UNKNOWN");
 
     if (gps_instances[i].enabled) {
       LOG_WARN("GPS[%d] 이미 초기화됨, 스킵", i);
@@ -895,31 +735,54 @@ void gps_init_all(void) {
       continue;
     }
 
-    gps_instances[i].queue = xQueueCreate(10, sizeof(uint8_t));
-    if (gps_instances[i].queue == NULL) {
-      LOG_ERR("GPS[%d] 큐 생성 실패", i);
+    // RX 큐 생성 (UART IDLE 인터럽트 신호용)
+    gps_instances[i].rx_queue = xQueueCreate(10, sizeof(uint8_t));
+    if (gps_instances[i].rx_queue == NULL) {
+      LOG_ERR("GPS[%d] RX 큐 생성 실패", i);
       gps_instances[i].enabled = false;
       continue;
     }
 
-    gps_port_set_queue((gps_id_t)i, gps_instances[i].queue);
+    gps_port_set_queue((gps_id_t)i, gps_instances[i].rx_queue);
 
-    gps_instances[i].cmd_queue = xQueueCreate(5, sizeof(gps_cmd_request_t));
-    if (gps_instances[i].cmd_queue == NULL) {
-      LOG_ERR("GPS[%d] TX 큐 생성 실패", i);
+    // App 큐 생성 (이벤트 전달용)
+    gps_instances[i].app_queue = xQueueCreate(10, sizeof(gps_app_event_t));
+    if (gps_instances[i].app_queue == NULL) {
+      LOG_ERR("GPS[%d] App 큐 생성 실패", i);
+      vQueueDelete(gps_instances[i].rx_queue);
       gps_instances[i].enabled = false;
       continue;
     }
+
+    // 동기식 명령어 전송용 세마포어 초기화
+    gps_instances[i].tx_mutex = xSemaphoreCreateMutex();
+    if (gps_instances[i].tx_mutex == NULL) {
+      LOG_ERR("GPS[%d] TX 뮤텍스 생성 실패", i);
+      gps_instances[i].enabled = false;
+      continue;
+    }
+
+    gps_instances[i].response_sem = xSemaphoreCreateBinary();
+    if (gps_instances[i].response_sem == NULL) {
+      LOG_ERR("GPS[%d] 응답 세마포어 생성 실패", i);
+      vSemaphoreDelete(gps_instances[i].tx_mutex);
+      gps_instances[i].enabled = false;
+      continue;
+    }
+
+    gps_instances[i].waiting_response = false;
+    gps_instances[i].response_ok = false;
 
     gps_port_start(&gps_instances[i].gps);
 
+    // RX 태스크 생성 (파싱만)
     char task_name[16];
     snprintf(task_name, sizeof(task_name), "gps_rx_%d", i);
 
     BaseType_t ret =
-        xTaskCreate(gps_process_task, task_name, 1024,
-                    (void *)(uintptr_t)i, // GPS ID
-                    tskIDLE_PRIORITY + 1, &gps_instances[i].task);
+        xTaskCreate(gps_rx_task, task_name, 1024,
+                    (void *)(uintptr_t)i,
+                    tskIDLE_PRIORITY + 2, &gps_instances[i].rx_task);
 
     if (ret != pdPASS) {
       LOG_ERR("GPS[%d] RX 태스크 생성 실패", i);
@@ -927,30 +790,31 @@ void gps_init_all(void) {
       continue;
     }
 
-    snprintf(task_name, sizeof(task_name), "gps_tx_%d", i);
-    ret = xTaskCreate(gps_tx_task, task_name, 512,
-                      (void *)(uintptr_t)i, // GPS ID를 파라미터로 전달
-                      tskIDLE_PRIORITY + 1, &gps_instances[i].tx_task);
+    // App 태스크 생성 (이벤트 핸들링)
+    snprintf(task_name, sizeof(task_name), "gps_app_%d", i);
+
+    ret = xTaskCreate(gps_app_task, task_name, 1024,
+                      (void *)(uintptr_t)i,
+                      tskIDLE_PRIORITY + 1, &gps_instances[i].app_task);
 
     if (ret != pdPASS) {
-      LOG_ERR("GPS[%d] TX 태스크 생성 실패", i);
+      LOG_ERR("GPS[%d] App 태스크 생성 실패", i);
+      vTaskDelete(gps_instances[i].rx_task);
       gps_instances[i].enabled = false;
       continue;
     }
 
-    LOG_INFO("GPS[%d] 인스턴스 초기화 완료", i);
+    LOG_INFO("GPS[%d] 인스턴스 초기화 완료 (RX + App 태스크)", i);
 
   }
 
   LOG_INFO("GPS 전체 인스턴스 초기화 완료");
-  if (config->board == BOARD_TYPE_BASE_F9P || config->board == BOARD_TYPE_BASE_UM982) {
+  if (config->board == BOARD_TYPE_BASE_UM982) {
     user_params_t *params = flash_params_get_current();
     if (params->base_auto_fix_enabled) {
       LOG_INFO("Base Auto-Fix 모드 활성화");
 
-      // 첫 번째 GPS 인스턴스로 초기화
       if (base_auto_fix_init(GPS_ID_BASE)) {
-        // 초기화 성공 시 시작
         if (base_auto_fix_start()) {
           LOG_INFO("Base Auto-Fix 시작 성공");
         } else {
@@ -962,7 +826,6 @@ void gps_init_all(void) {
     } else {
       LOG_INFO("Base Auto-Fix 모드 비활성화 (파라미터 설정)");
     }
-
   }
 }
 
@@ -1010,6 +873,11 @@ bool gps_get_gga_avg(gps_id_t id, double *lat, double *lon, double *alt) {
   return true;
 }
 
+/**
+ * @brief 동기식 GPS 명령어 전송
+ *
+ * 직접 UART로 전송하고 응답을 기다림 (TX 태스크 없음)
+ */
 bool gps_send_command_sync(gps_id_t id, const char *cmd, uint32_t timeout_ms) {
   if (id >= GPS_ID_MAX || !gps_instances[id].enabled) {
     LOG_ERR("GPS[%d] invalid or disabled", id);
@@ -1023,86 +891,57 @@ bool gps_send_command_sync(gps_id_t id, const char *cmd, uint32_t timeout_ms) {
 
   gps_instance_t *inst = &gps_instances[id];
 
-  // 세마포어 생성 (응답 대기용)
-  SemaphoreHandle_t response_sem = xSemaphoreCreateBinary();
-  if (response_sem == NULL) {
-    LOG_ERR("GPS[%d] failed to create semaphore", id);
+  // TX 뮤텍스 획득 (동시 전송 방지)
+  if (xSemaphoreTake(inst->tx_mutex, pdMS_TO_TICKS(5000)) != pdTRUE) {
+    LOG_ERR("GPS[%d] tx_mutex timeout", id);
     return false;
   }
 
-  // 명령어 요청 구조체 생성
-  bool result = false;
- gps_cmd_request_t cmd_req = {
-      .timeout_ms = timeout_ms,
-      .is_async = false,
-      .response_sem = response_sem,
-      .result = &result,
-      .callback = NULL,
-      .user_data = NULL,
-  };
+  // 응답 대기 플래그 설정
+  inst->waiting_response = true;
+  inst->response_ok = false;
 
-  strncpy(cmd_req.cmd, cmd, sizeof(cmd_req.cmd) - 1);
-  cmd_req.cmd[sizeof(cmd_req.cmd) - 1] = '\0';
+  LOG_INFO("GPS[%d] Sending command: %s", id, cmd);
 
-  if (xQueueSend(inst->cmd_queue, &cmd_req, pdMS_TO_TICKS(1000)) != pdTRUE) {
-    LOG_ERR("GPS[%d] failed to send command to TX task", id);
-    vSemaphoreDelete(response_sem);
-    return false;
-  }
-
-  if (xSemaphoreTake(response_sem, pdMS_TO_TICKS(timeout_ms + 1000)) == pdTRUE) {
-    // 처리 완료
-    vSemaphoreDelete(response_sem);
-    return result;
+  // 직접 UART 전송
+  if (inst->gps.ops && inst->gps.ops->send) {
+    inst->gps.ops->send(cmd, strlen(cmd));
   } else {
-    LOG_ERR("GPS[%d] 전송 태스크 응답 없음", id);
-    vSemaphoreDelete(response_sem);
+    LOG_ERR("GPS[%d] send ops not available", id);
+    inst->waiting_response = false;
+    xSemaphoreGive(inst->tx_mutex);
     return false;
   }
+
+  // 응답 대기 (타임아웃 적용)
+  bool result = false;
+  if (xSemaphoreTake(inst->response_sem, pdMS_TO_TICKS(timeout_ms)) == pdTRUE) {
+    result = inst->response_ok;
+    LOG_INFO("GPS[%d] Response: %s", id, result ? "OK" : "ERROR");
+  } else {
+    LOG_WARN("GPS[%d] Command timeout", id);
+    result = false;
+  }
+
+  inst->waiting_response = false;
+  xSemaphoreGive(inst->tx_mutex);
+
+  return result;
 }
 
+/**
+ * @brief 비동기 GPS 명령어 전송 (호환성을 위해 유지)
+ *
+ * 내부적으로 동기식으로 실행하고 콜백 호출
+ */
 bool gps_send_command_async(gps_id_t id, const char *cmd, uint32_t timeout_ms,
                              gps_command_callback_t callback, void *user_data) {
-  if (id >= GPS_ID_MAX || !gps_instances[id].enabled) {
-    LOG_ERR("GPS[%d] invalid", id);
-    return false;
+  bool result = gps_send_command_sync(id, cmd, timeout_ms);
+
+  if (callback) {
+    callback(result, user_data);
   }
 
-  if (!cmd || strlen(cmd) == 0) {
-    LOG_ERR("GPS[%d] 잘못된 명령", id);
-    return false;
-  }
-
-  gps_instance_t *inst = &gps_instances[id];
-
-  // 세마포어 생성 (TX Task 내부에서 응답 대기용)
-  SemaphoreHandle_t response_sem = xSemaphoreCreateBinary();
-  if (response_sem == NULL) {
-    LOG_ERR("GPS[%d] 세마포어 생성 실패", id);
-    return false;
-  }
-
-  // 명령어 요청 구조체 생성 (비동기 방식)
-  gps_cmd_request_t cmd_req = {
-      .timeout_ms = timeout_ms,
-      .is_async = true,
-      .response_sem = response_sem,
-      .result = NULL,
-      .callback = callback,
-      .user_data = user_data,
-      .async_result = false,
-  };
-
-  strncpy(cmd_req.cmd, cmd, sizeof(cmd_req.cmd) - 1);
-  cmd_req.cmd[sizeof(cmd_req.cmd) - 1] = '\0';
-
-  if (xQueueSend(inst->cmd_queue, &cmd_req, pdMS_TO_TICKS(1000)) != pdTRUE) {
-    LOG_ERR("GPS[%d] 메시지큐 전송 실패", id);
-    vSemaphoreDelete(response_sem);
-    return false;
-  }
-
-  LOG_DEBUG("GPS[%d] 비동기 명령 메시지큐 전송", id);
   return true;
 }
 
@@ -1136,34 +975,6 @@ bool gps_send_raw_data(gps_id_t id, const uint8_t *data, size_t len) {
 }
 
 
-bool gps_factory_reset_async(gps_id_t id, gps_init_callback_t callback, void *user_data)
-{
-  if (id >= GPS_ID_MAX || !gps_instances[id].enabled) {
-
-    LOG_ERR("GPS[%d] invalid", id);
-
-    return false;
-
-  }
-
-  gps_instance_t *inst = &gps_instances[id];
-
-  if (inst->type != GPS_TYPE_F9P) {
-    return false;
-  }
-
-  if (!ubx_factory_reset(&inst->gps, callback, user_data)) {
-
-    LOG_ERR("GPS[%d] 팩토리 리셋 실패", id);
-
-    return false;
-
-  }
-
- 
-
-  return true;
-}
 
 
 
@@ -1195,14 +1006,11 @@ static double convert_dm(double lat_dd)
  *
  * GPS 타입별 데이터 소스:
  * - Unicore UM982: BESTNAV (lat, lon, height, geoid, trk_gnd)
- * - Ublox F9P: HPPOSLLH (lat, lon, height, msl) + RELPOSNED (heading)
  */
 bool gps_format_position_data(char *buffer)
 {
   gps_instance_t *inst = &gps_instances[0];
-  gps_instance_t *heading_inst = &gps_instances[1];
-  const board_config_t *config = board_get_config();
-  double lat, lon, geoid, msl_alt, ellipsoid_alt, heading;
+  double lat, lon, geoid, ellipsoid_alt, heading;
   char ns = 'N', ew = 'E';
   int fix;
   int sat_num;
@@ -1211,49 +1019,33 @@ bool gps_format_position_data(char *buffer)
   char ew_str[2] = {ew, '\0'};
 
   taskENTER_CRITICAL();
-  if(config->board == BOARD_TYPE_ROVER_F9P)
+  lat = convert_dm(inst->gps.unicore_bin_data.bestnav.lat);
+  lon = convert_dm(inst->gps.unicore_bin_data.bestnav.lon);
+  heading = inst->gps.nmea_data.ths.heading;
+  ns = inst->gps.nmea_data.gga.ns;
+  ew = inst->gps.nmea_data.gga.ew;
+  fix = inst->gps.nmea_data.gga.fix;
+  if(fix == 0)
   {
-    lat = convert_dm(inst->gps.ubx_data.hpposllh.lat * 1e-7 + inst->gps.ubx_data.hpposllh.lat_hp * 1e-9);
-    lon = convert_dm(inst->gps.ubx_data.hpposllh.lon * 1e-7 + inst->gps.ubx_data.hpposllh.lon_hp * 1e-9);
-    ellipsoid_alt = (inst->gps.ubx_data.hpposllh.height + inst->gps.ubx_data.hpposllh.height_hp * (double)0.1) / (double)1000.0;
-    msl_alt = (inst->gps.ubx_data.hpposllh.msl + inst->gps.ubx_data.hpposllh.msl_hp * (double)0.1) / (double)1000.0;
-    geoid = ellipsoid_alt - msl_alt;
-    heading = heading_inst->gps.ubx_data.relposned.rel_pos_heading * 1e-5;
-    ns = inst->gps.nmea_data.gga.ns;
-    ew = inst->gps.nmea_data.gga.ew;
-    fix = inst->gps.nmea_data.gga.fix;
-    sat_num = inst->gps.nmea_data.gga.sat_num;
+    ellipsoid_alt = 0;
+    geoid = 0;
   }
-  else if (config->board == BOARD_TYPE_ROVER_UM982) 
+  else
   {
-    lat = convert_dm(inst->gps.unicore_bin_data.bestnav.lat);
-    lon = convert_dm(inst->gps.unicore_bin_data.bestnav.lon);
-    heading = inst->gps.nmea_data.ths.heading;
-    ns = inst->gps.nmea_data.gga.ns;
-    ew = inst->gps.nmea_data.gga.ew;
-    fix = inst->gps.nmea_data.gga.fix;
-    if(fix == 0)
-    {
-      ellipsoid_alt = 0;
-      geoid = 0;
-    }
-    else
-    {
-      ellipsoid_alt = inst->gps.unicore_bin_data.bestnav.height;
-      geoid = inst->gps.unicore_bin_data.bestnav.geoid;
-    }
-    sat_num = inst->gps.nmea_data.gga.sat_num;
+    ellipsoid_alt = inst->gps.unicore_bin_data.bestnav.height;
+    geoid = inst->gps.unicore_bin_data.bestnav.geoid;
   }
+  sat_num = inst->gps.nmea_data.gga.sat_num;
   taskEXIT_CRITICAL();
 
-  int written = sprintf(buffer,
-                         "+GPS,%.9lf,%s,%.9lf,%s,%.4lf,%.4lf,%.5lf,%d,%d\n\r",
-                        lat, ns_str, lon, ew_str,
-                        ellipsoid_alt,
-                        geoid,
-                        heading,
-                        fix,
-                        sat_num);
+  sprintf(buffer,
+          "+GPS,%.9lf,%s,%.9lf,%s,%.4lf,%.4lf,%.5lf,%d,%d\n\r",
+          lat, ns_str, lon, ew_str,
+          ellipsoid_alt,
+          geoid,
+          heading,
+          fix,
+          sat_num);
 
   return true;
 }
@@ -1555,70 +1347,54 @@ bool gps_cleanup_instance(gps_id_t id)
 
   gps_port_cleanup_instance(id);
 
- 
-
-  if (inst->task != NULL) {
-
-    vTaskDelete(inst->task);
-
-    inst->task = NULL;
-
-  
-LOG_INFO("GPS[%d] RX 태스크 삭제 요청", id);
-
+  // RX 태스크 삭제
+  if (inst->rx_task != NULL) {
+    vTaskDelete(inst->rx_task);
+    inst->rx_task = NULL;
+    LOG_INFO("GPS[%d] RX 태스크 삭제 요청", id);
   }
 
- 
-
-  if (inst->tx_task != NULL) {
-
-    vTaskDelete(inst->tx_task);
-
-    inst->tx_task = NULL;
-
-    LOG_INFO("GPS[%d] TX 태스크 삭제 요청", id);
-
+  // App 태스크 삭제
+  if (inst->app_task != NULL) {
+    vTaskDelete(inst->app_task);
+    inst->app_task = NULL;
+    LOG_INFO("GPS[%d] App 태스크 삭제 요청", id);
   }
-
- 
 
   vTaskDelay(pdMS_TO_TICKS(50));
-
   LOG_INFO("GPS[%d] 태스크 정리 대기 완료", id);
- 
 
-  if (inst->queue != NULL) {
-
-    vQueueDelete(inst->queue);
-
-    inst->queue = NULL;
-
-    LOG_INFO("GPS[%d] 큐 삭제 완료", id);
-
+  // RX 큐 삭제
+  if (inst->rx_queue != NULL) {
+    vQueueDelete(inst->rx_queue);
+    inst->rx_queue = NULL;
+    LOG_INFO("GPS[%d] RX 큐 삭제 완료", id);
   }
 
- 
-
-  if (inst->cmd_queue != NULL) {
-
-    vQueueDelete(inst->cmd_queue);
-
-    inst->cmd_queue = NULL;
-
-    LOG_INFO("GPS[%d] 명령 큐 삭제 완료", id);
-
+  // App 큐 삭제
+  if (inst->app_queue != NULL) {
+    vQueueDelete(inst->app_queue);
+    inst->app_queue = NULL;
+    LOG_INFO("GPS[%d] App 큐 삭제 완료", id);
   }
 
- 
+  // 동기식 명령어 전송용 세마포어 정리
+  if (inst->tx_mutex != NULL) {
+    vSemaphoreDelete(inst->tx_mutex);
+    inst->tx_mutex = NULL;
+    LOG_INFO("GPS[%d] TX 뮤텍스 삭제 완료", id);
+  }
+
+  if (inst->response_sem != NULL) {
+    vSemaphoreDelete(inst->response_sem);
+    inst->response_sem = NULL;
+    LOG_INFO("GPS[%d] 응답 세마포어 삭제 완료", id);
+  }
 
   if (inst->gps.mutex != NULL) {
-
     vSemaphoreDelete(inst->gps.mutex);
-
     inst->gps.mutex = NULL;
-
-    LOG_INFO("GPS[%d] 뮤텍스 삭제 완료", id);
-
+    LOG_INFO("GPS[%d] GPS 뮤텍스 삭제 완료", id);
   }
 
  

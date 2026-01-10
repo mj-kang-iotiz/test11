@@ -83,13 +83,12 @@ bool gps_gga_avg_can_read(gps_id_t id);
  * @return true: 성공, false: 실패
  */
 bool gps_get_gga_avg(gps_id_t id, double *lat, double *lon, double *alt);
-bool gps_factory_reset_async(gps_id_t id, gps_init_callback_t callback, void *user_data);
 bool gps_format_position_data(char *buffer);
 bool gps_config_heading_length_async(gps_id_t id, float baseline_len, float slave_distance,
                                      gps_command_callback_t callback, void *user_data);
 
- void gps_set_heading_length();      
- bool gps_cleanup_instance(gps_id_t id);
+void gps_set_heading_length(void);
+bool gps_cleanup_instance(gps_id_t id);
 void gps_cleanup_all(void);                              
 
 #endif

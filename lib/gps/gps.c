@@ -154,16 +154,6 @@ void gps_parse_process(gps_t *gps, const void *data, size_t len) {
         gps->protocol = GPS_PROTOCOL_NMEA;
         gps->state = GPS_PARSE_STATE_NMEA_START;
       } 
-      /* UBX binary */
-      else if (*d == 0xB5 && gps->state == GPS_PARSE_STATE_NONE) {
-        gps->state = GPS_PARSE_STATE_UBX_SYNC_1;
-      } 
-      else if (*d == 0x62 && gps->state == GPS_PARSE_STATE_UBX_SYNC_1) {
-        memset(&gps->ubx, 0, sizeof(gps->ubx));
-        gps->pos = 0;
-        gps->protocol = GPS_PROTOCOL_UBX;
-        gps->state = GPS_PARSE_STATE_UBX_SYNC_2;
-      } 
       /* UNICORE binary */
       else if(*d == 0xAA && gps->state == GPS_PARSE_STATE_NONE) {
         gps->state = GPS_PARSE_STATE_UNICORE_SYNC1;
@@ -201,8 +191,6 @@ void gps_parse_process(gps_t *gps, const void *data, size_t len) {
           add_payload(gps, *d);
           gps->protocol = GPS_PROTOCOL_RTCM;
           gps->state = GPS_PARSE_STATE_RTCM_PREAMBLE;
-        }else if (*d == 0xB5) {
-          gps->state = GPS_PARSE_STATE_UBX_SYNC_1;
         } else if (*d == 0xAA) {
           gps->state = GPS_PARSE_STATE_UNICORE_SYNC1;
           gps->pos = 0;
@@ -267,10 +255,7 @@ void gps_parse_process(gps_t *gps, const void *data, size_t len) {
         }
         term_add(gps, *d);
       }
-    } else if (gps->protocol == GPS_PROTOCOL_UBX) {
-      add_payload(gps, *d);
-      gps_parse_ubx(gps);
-    } 
+    }
     else if(gps->protocol == GPS_PROTOCOL_UNICORE)
     {
       if (*d == ',') {

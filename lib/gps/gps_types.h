@@ -13,10 +13,9 @@ typedef struct gps_s gps_t;
 typedef enum {
   GPS_PROTOCOL_NONE = 0,
   GPS_PROTOCOL_NMEA = 1,
-  GPS_PROTOCOL_UBX = 2,
-  GPS_PROTOCOL_UNICORE_BIN = 3,
-  GPS_PROTOCOL_UNICORE = 4,
-  GPS_PROTOCOL_RTCM = 5,
+  GPS_PROTOCOL_UNICORE_BIN = 2,
+  GPS_PROTOCOL_UNICORE = 3,
+  GPS_PROTOCOL_RTCM = 4,
   GPS_PROTOCOL_INVALID = UINT8_MAX
 } gps_protocol_t;
 
@@ -42,16 +41,6 @@ typedef enum {
   GPS_PARSE_STATE_NMEA_DATA = 3,
   GPS_PARSE_STATE_NMEA_CHKSUM = 4,
   GPS_PARSE_STATE_NMEA_END_SEQ = 5,
-
-  /* UBX protocol */
-  GPS_PARSE_STATE_UBX_SYNC_1 = 10,
-  GPS_PARSE_STATE_UBX_SYNC_2 = 11,
-  GPS_PARSE_STATE_UBX_MSG_CLASS = 12,
-  GPS_PARSE_STATE_UBX_MSG_ID = 13,
-  GPS_PARSE_STATE_UBX_LEN = 14,
-  GPS_PARSE_STATE_UBX_PAYLOAD = 15,
-  GPS_PARSE_STATE_UBX_CHKSUM_A = 16,
-  GPS_PARSE_STATE_UBX_CHKSUM_B = 17,
 
   /* UNICORE protocol */
   GPS_PARSE_STATE_UNICORE_START = 20,
@@ -91,10 +80,6 @@ typedef enum {
 
 typedef union {
   gps_nmea_msg_t nmea;
-  struct {
-    uint8_t class;
-    uint8_t id;
-  } ubx;
   struct {
     uint16_t msg;
   } unicore_bin;

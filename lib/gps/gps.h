@@ -4,7 +4,6 @@
 #include "FreeRTOS.h"
 #include "gps_types.h"
 #include "gps_nmea.h"
-#include "gps_ubx.h"
 #include "gps_unicore.h"
 #include "rtcm.h"
 #include "semphr.h"
