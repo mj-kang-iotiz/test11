@@ -150,14 +150,14 @@ static bool gps_send_um982_cmds(gps_t *gps, const char **cmds, size_t count) {
   bool all_ok = true;
 
   for (size_t i = 0; i < count; i++) {
-    LOG_INFO("Sending: %s", cmds[i]);
+    LOG_INFO("[%d/%d] UM982 -> %s", i + 1, count, cmds[i]);
 
     bool result = gps_send_cmd_sync(gps, cmds[i], 2000);
 
     if (result) {
-      LOG_INFO("  -> OK");
+      LOG_INFO("[%d/%d] 성공", i + 1, count);
     } else {
-      LOG_ERR("  -> ERROR/TIMEOUT");
+      LOG_ERR("[%d/%d] 실패 (ERROR 또는 TIMEOUT)", i + 1, count);
       all_ok = false;
     }
 
@@ -257,58 +257,103 @@ static void gps_app_task(void *pvParameter) {
 }
 
 /*===========================================================================
- * GPS 전체 초기화
+ * GPS 앱 태스크 생성/삭제
  *===========================================================================*/
 
-void gps_init_all(void) {
+/**
+ * @brief 특정 GPS 앱 태스크 생성
+ */
+static bool gps_app_create(gps_id_t id) {
   const board_config_t *config = board_get_config();
 
-  LOG_INFO("GPS 전체 초기화 시작");
-
-  for (uint8_t i = 0; i < config->gps_cnt && i < GPS_ID_MAX; i++) {
-    gps_type_t type = config->gps[i];
-
-    LOG_INFO("GPS[%d] 타입: %s", i,
-             type == GPS_TYPE_UM982 ? "UM982" : "UNKNOWN");
-
-    if (gps_instances[i].enabled) {
-      LOG_WARN("GPS[%d] 이미 초기화됨, 스킵", i);
-      continue;
-    }
-
-    gps_instances[i].type = type;
-    gps_instances[i].id = (gps_id_t)i;
-    gps_instances[i].enabled = true;
-
-    // GPS 앱 태스크 생성
-    char task_name[16];
-    snprintf(task_name, sizeof(task_name), "gps_app_%d", i);
-
-    BaseType_t ret = xTaskCreate(
-        gps_app_task,
-        task_name,
-        2048,                     // 스택 크기 (초기화 작업이 많으므로 충분히 할당)
-        (void *)(uintptr_t)i,     // GPS ID
-        tskIDLE_PRIORITY + 2,     // 우선순위
-        &gps_instances[i].task
-    );
-
-    if (ret != pdPASS) {
-      LOG_ERR("GPS[%d] 앱 태스크 생성 실패", i);
-      gps_instances[i].enabled = false;
-      continue;
-    }
-
-    LOG_INFO("GPS[%d] 앱 태스크 생성 완료", i);
+  if (id >= GPS_ID_MAX || id >= config->gps_cnt) {
+    LOG_ERR("GPS[%d] 잘못된 ID", id);
+    return false;
   }
 
-  LOG_INFO("GPS 전체 인스턴스 초기화 완료");
+  if (gps_instances[id].enabled) {
+    LOG_WARN("GPS[%d] 이미 실행 중", id);
+    return false;
+  }
+
+  gps_type_t type = config->gps[id];
+  LOG_INFO("GPS[%d] 생성 시작 (타입: %s)", id,
+           type == GPS_TYPE_UM982 ? "UM982" : "UNKNOWN");
+
+  gps_instances[id].type = type;
+  gps_instances[id].id = id;
+  gps_instances[id].enabled = true;
+  gps_instances[id].last_fix = GPS_FIX_INVALID;
+
+  char task_name[16];
+  snprintf(task_name, sizeof(task_name), "gps_app_%d", id);
+
+  BaseType_t ret = xTaskCreate(
+      gps_app_task,
+      task_name,
+      2048,
+      (void *)(uintptr_t)id,
+      tskIDLE_PRIORITY + 2,
+      &gps_instances[id].task
+  );
+
+  if (ret != pdPASS) {
+    LOG_ERR("GPS[%d] 태스크 생성 실패", id);
+    gps_instances[id].enabled = false;
+    return false;
+  }
+
+  LOG_INFO("GPS[%d] 태스크 생성 완료", id);
+  return true;
+}
+
+/**
+ * @brief 특정 GPS 앱 태스크 삭제
+ */
+static bool gps_app_destroy(gps_id_t id) {
+  if (id >= GPS_ID_MAX || !gps_instances[id].enabled) {
+    LOG_WARN("GPS[%d] 실행 중이 아님", id);
+    return false;
+  }
+
+  LOG_INFO("GPS[%d] 종료 시작", id);
+
+  // GPS 통신 중지
+  gps_port_stop(&gps_instances[id].gps);
+
+  // 태스크 삭제 (태스크는 자체 종료하도록 플래그 설정)
+  gps_instances[id].enabled = false;
+
+  // 태스크가 자체 종료할 때까지 대기
+  if (gps_instances[id].task) {
+    vTaskDelay(pdMS_TO_TICKS(100));
+    // 태스크는 gps_app_task 내에서 vTaskDelete(NULL) 호출
+    gps_instances[id].task = NULL;
+  }
+
+  LOG_INFO("GPS[%d] 종료 완료", id);
+  return true;
+}
+
+/**
+ * @brief 모든 GPS 앱 태스크 생성 및 초기화
+ */
+void gps_app_start_all(void) {
+  const board_config_t *config = board_get_config();
+
+  LOG_INFO("GPS 앱 전체 시작");
+
+  for (uint8_t i = 0; i < config->gps_cnt && i < GPS_ID_MAX; i++) {
+    gps_app_create((gps_id_t)i);
+  }
+
+  LOG_INFO("GPS 앱 전체 시작 완료");
 
   // Base Auto-Fix 초기화 (필요시)
   if (config->board == BOARD_TYPE_BASE_UM982) {
     user_params_t *params = flash_params_get_current();
     if (params->base_auto_fix_enabled) {
-      LOG_INFO("Base Auto-Fix 모드 활성화");
+      LOG_INFO("Base Auto-Fix 활성화");
 
       if (base_auto_fix_init(GPS_ID_BASE)) {
         if (base_auto_fix_start()) {
@@ -319,10 +364,23 @@ void gps_init_all(void) {
       } else {
         LOG_ERR("Base Auto-Fix 초기화 실패");
       }
-    } else {
-      LOG_INFO("Base Auto-Fix 모드 비활성화 (파라미터 설정)");
     }
   }
+}
+
+/**
+ * @brief 모든 GPS 앱 태스크 종료 및 정리
+ */
+void gps_app_stop_all(void) {
+  LOG_INFO("GPS 앱 전체 종료");
+
+  for (uint8_t i = 0; i < GPS_ID_MAX; i++) {
+    if (gps_instances[i].enabled) {
+      gps_app_destroy((gps_id_t)i);
+    }
+  }
+
+  LOG_INFO("GPS 앱 전체 종료 완료");
 }
 
 /*===========================================================================
