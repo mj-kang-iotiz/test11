@@ -46,6 +46,7 @@ static int ble_configure_module(void);
 
 static char ble_recv_buf[BLE_RX_BUF_SIZE];
 static QueueHandle_t ble_rx_queue = NULL;
+static ble_t *ble_handle = NULL;
 
 /*===========================================================================
  * HAL ops 정의
@@ -124,6 +125,11 @@ char *ble_port_get_recv_buf(void)
 void ble_port_set_queue(QueueHandle_t queue)
 {
     ble_rx_queue = queue;
+}
+
+void ble_port_set_ble_handle(ble_t *ble)
+{
+    ble_handle = ble;
 }
 
 /*===========================================================================

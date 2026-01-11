@@ -152,23 +152,4 @@ void ble_app_set_conn_state(ble_conn_state_t state);
  */
 ble_mode_t ble_app_get_mode(void);
 
-/*===========================================================================
- * 레거시 호환 API (기존 코드 호환용)
- *===========================================================================*/
-
-/** @deprecated ble_app_start() 사용 */
-#define ble_init_all() ble_app_start()
-
-/** @deprecated ble_app_get_handle() 사용 */
-#define ble_get_handle() ble_app_get_handle()
-
-/** @deprecated ble_app_get_instance() 사용 */
-#define ble_get_instance() ble_app_get_instance()
-
-/** @deprecated ble_app_get_conn_state() 사용 */
-#define ble_get_connection_state() ble_app_get_conn_state()
-
-/** @deprecated ble_app_set_conn_state() 사용 */
-#define ble_set_connection_state(state) ble_app_set_conn_state(state)
-
 #endif /* BLE_APP_H */

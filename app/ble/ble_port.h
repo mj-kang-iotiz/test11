@@ -58,6 +58,12 @@ char *ble_port_get_recv_buf(void);
 void ble_port_set_queue(QueueHandle_t queue);
 
 /**
+ * @brief BLE 핸들 설정 (링버퍼 접근용)
+ * @param ble BLE 핸들
+ */
+void ble_port_set_ble_handle(ble_t *ble);
+
+/**
  * @brief Polling 방식 라인 수신 (초기화용)
  * @param buf 버퍼
  * @param buf_size 버퍼 크기

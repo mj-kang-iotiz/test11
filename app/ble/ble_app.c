@@ -44,13 +44,13 @@ void ble_app_start(void)
         return;
     }
 
-    /* 포트 초기화 (HAL ops 설정) */
+    /* 포트 초기화 (HAL ops 설정, 링버퍼 초기화) */
     if (ble_port_init_instance(&ble_instance.ble) != 0) {
         LOG_ERR("BLE 포트 초기화 실패");
         return;
     }
 
-    /* RX 큐 생성 */
+    /* RX 큐 생성 (IDLE 인터럽트 신호용) */
     ble_instance.rx_queue = xQueueCreate(10, sizeof(uint8_t));
     if (!ble_instance.rx_queue) {
         LOG_ERR("BLE RX 큐 생성 실패");
@@ -58,6 +58,9 @@ void ble_app_start(void)
     }
 
     ble_port_set_queue(ble_instance.rx_queue);
+
+    /* BLE 핸들 포인터 전달 (ble_port에서 링버퍼 접근용) */
+    ble_port_set_ble_handle(&ble_instance.ble);
 
     /* 이벤트 핸들러 설정 */
     ble_set_evt_handler(&ble_instance.ble, ble_evt_handler, &ble_instance);
@@ -297,7 +300,8 @@ ble_mode_t ble_app_get_mode(void)
 /**
  * @brief RX 태스크
  *
- * DMA로 수신된 데이터를 파서에 전달
+ * DMA 버퍼에서 데이터를 읽어 링버퍼에 쓰고,
+ * 링버퍼에서 읽어 파싱 (GPS 구조와 동일)
  */
 static void ble_rx_task(void *pvParameter)
 {
@@ -314,20 +318,20 @@ static void ble_rx_task(void *pvParameter)
 
         /* DMA 버퍼에서 새 데이터 확인 */
         pos = ble_port_get_rx_pos();
-        char *rx_buf = ble_port_get_recv_buf();
+        char *dma_buf = ble_port_get_recv_buf();
 
         if (pos != old_pos) {
             if (pos > old_pos) {
-                /* 선형 데이터 */
+                /* 선형 데이터 → 링버퍼에 쓰기 */
                 size_t len = pos - old_pos;
-                ble_process_rx(&inst->ble, (const uint8_t *)&rx_buf[old_pos], len);
+                ble_rx_write(&inst->ble, (const uint8_t *)&dma_buf[old_pos], len);
             } else {
-                /* 래핑된 데이터 */
+                /* 래핑된 데이터 → 링버퍼에 쓰기 */
                 size_t len1 = BLE_RX_BUF_SIZE - old_pos;
-                ble_process_rx(&inst->ble, (const uint8_t *)&rx_buf[old_pos], len1);
+                ble_rx_write(&inst->ble, (const uint8_t *)&dma_buf[old_pos], len1);
 
                 if (pos > 0) {
-                    ble_process_rx(&inst->ble, (const uint8_t *)rx_buf, pos);
+                    ble_rx_write(&inst->ble, (const uint8_t *)dma_buf, pos);
                 }
             }
 
@@ -336,6 +340,9 @@ static void ble_rx_task(void *pvParameter)
                 old_pos = 0;
             }
         }
+
+        /* 링버퍼에서 읽어서 파싱 */
+        ble_process_rx(&inst->ble);
     }
 
     LOG_INFO("BLE RX 태스크 종료");

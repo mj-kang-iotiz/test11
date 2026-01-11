@@ -6,7 +6,7 @@
  * @brief BLE 메인 헤더
  *
  * BLE 모듈 핵심 기능:
- * - AT 명령어로 모듈 설정
+ * - AT 명령어로 모듈 설정 (AT 모드)
  * - 외부 PC 명령어 송수신 (Bypass 모드)
  * - 이벤트 기반 데이터 처리
  * - FOTA 지원 (예정)
@@ -23,6 +23,7 @@
 
 #include "ble_types.h"
 #include "ble_parser.h"
+#include "ringbuffer.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -52,6 +53,10 @@ struct ble_s {
     /*--- HAL ---*/
     const ble_hal_ops_t *ops;       /**< HAL 연산 함수 포인터 */
 
+    /*--- RX 버퍼 (GPS처럼 링버퍼 사용) ---*/
+    ringbuffer_t rx_buf;            /**< RX 링버퍼 */
+    char rx_buf_mem[BLE_RX_BUF_SIZE]; /**< RX 버퍼 메모리 */
+
     /*--- 파서 ---*/
     ble_parser_ctx_t parser_ctx;    /**< 파서 컨텍스트 */
     char line_buf[BLE_PARSER_BUF_SIZE]; /**< 파싱된 라인 저장 */
@@ -77,8 +82,8 @@ struct ble_s {
 /**
  * @brief BLE 구조체 초기화
  *
- * HAL ops만 설정하고 OS 리소스는 생성하지 않음
- * OS 리소스 생성은 app 레벨에서 수행
+ * HAL ops 설정, 링버퍼 초기화, 파서 초기화
+ * OS 리소스(세마포어, 뮤텍스) 생성
  *
  * @param ble BLE 핸들
  * @param ops HAL 연산
@@ -95,6 +100,28 @@ bool ble_init(ble_t *ble, const ble_hal_ops_t *ops);
 void ble_set_evt_handler(ble_t *ble, ble_evt_handler_t handler, void *user_data);
 
 /*===========================================================================
+ * 링버퍼 API (DMA에서 데이터 기록용)
+ *===========================================================================*/
+
+/**
+ * @brief RX 링버퍼에 데이터 쓰기
+ *
+ * DMA 인터럽트 또는 IDLE 인터럽트에서 호출
+ *
+ * @param ble BLE 핸들
+ * @param data 수신 데이터
+ * @param len 데이터 길이
+ */
+void ble_rx_write(ble_t *ble, const uint8_t *data, size_t len);
+
+/**
+ * @brief RX 링버퍼 포인터 가져오기
+ * @param ble BLE 핸들
+ * @return 링버퍼 포인터
+ */
+ringbuffer_t *ble_get_rx_buf(ble_t *ble);
+
+/*===========================================================================
  * 데이터 송수신 API
  *===========================================================================*/
 
@@ -108,16 +135,14 @@ void ble_set_evt_handler(ble_t *ble, ble_evt_handler_t handler, void *user_data)
 bool ble_send(ble_t *ble, const char *data, size_t len);
 
 /**
- * @brief 수신 데이터 파싱 처리
+ * @brief RX 링버퍼에서 데이터 읽어서 파싱
  *
- * DMA/인터럽트로 수신된 데이터를 파서에 전달
+ * RX 태스크에서 주기적으로 호출
  * 파싱 완료 시 이벤트 핸들러 호출
  *
  * @param ble BLE 핸들
- * @param data 수신 데이터
- * @param len 데이터 길이
  */
-void ble_process_rx(ble_t *ble, const uint8_t *data, size_t len);
+void ble_process_rx(ble_t *ble);
 
 /*===========================================================================
  * AT 명령어 API (동기)
