@@ -12,11 +12,14 @@
 /*===========================================================================
  * NMEA 183 메시지 정의 (UM982 지원)
  * X(name, str, handler, field_count, is_urc)
- *   - name: enum 이름 (GPS_NMEA_MSG_xxx)
- *   - str: 메시지 문자열 (GGA, RMC 등)
+ *   - name: enum 이름 suffix (GGA, RMC 등) → GPS_NMEA_MSG_GGA로 자동 생성
+ *   - str: 메시지 문자열 ("GGA", "RMC" 등)
  *   - handler: 파싱 핸들러 함수 (NULL이면 무시)
  *   - field_count: 최소 필드 수 (delimiter ',' 기준, 0이면 체크 안함)
  *   - is_urc: URC(비동기 데이터) 여부
+ *
+ * NOTE: enum 값은 GPS_NMEA_MSG_NONE(0) 다음부터 자동으로 1, 2, 3... 할당됨
+ *       테이블에서는 생성된 enum 값을 명시적으로 저장하여 안전하게 매핑
  *===========================================================================*/
 #define NMEA_MSG_TABLE(X) \
     X(GGA, "GGA", nmea_parse_gga, 14, true)  /* Global Positioning System Fix Data */ \

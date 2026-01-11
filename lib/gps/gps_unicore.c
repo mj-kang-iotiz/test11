@@ -8,6 +8,7 @@
 #include "gps_parser.h"
 #include "gps_proto_def.h"
 #include "gps_parse.h"
+#include "dev_assert.h"
 #include <string.h>
 #include <stdlib.h>
 
@@ -102,10 +103,24 @@ static const struct {
 /*===========================================================================
  * X-Macro 기반 문자열 변환 함수
  *===========================================================================*/
+
+/* Unicore Binary 메시지 ID → 문자열 */
 static const char* unicore_bin_msg_to_str(uint16_t msg_id) {
     switch (msg_id) {
 #define X(name, id, handler, is_urc) case id: return #name;
         UNICORE_BIN_MSG_TABLE(X)
+#undef X
+        default: return "UNKNOWN";
+    }
+}
+
+/* Unicore Response → 문자열 */
+static const char* unicore_resp_to_str(gps_unicore_resp_t resp) {
+    if (resp == GPS_UNICORE_RESP_NONE) return "NONE";
+
+    switch (resp) {
+#define X(name, str) case GPS_UNICORE_RESP_##name: return str;
+        UNICORE_RESP_TABLE(X)
 #undef X
         default: return "UNKNOWN";
     }

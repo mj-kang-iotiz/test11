@@ -3,6 +3,7 @@
 #include "gps_parser.h"
 #include "gps_proto_def.h"
 #include "lora_app.h"
+#include "dev_assert.h"
 #include "FreeRTOS.h"
 #include "task.h"
 #include <string.h>
@@ -13,6 +14,20 @@
 #endif
 
 #include "log.h"
+
+/*===========================================================================
+ * X-Macro 기반 문자열 변환 함수
+ *===========================================================================*/
+static const char* rtcm_msg_to_str(uint16_t msg_type) {
+    if (msg_type == 0) return "NONE";
+
+    switch (msg_type) {
+#define X(name, type, description) case type: return description;
+        RTCM_MSG_TABLE(X)
+#undef X
+        default: return "UNKNOWN";
+    }
+}
 
 /*===========================================================================
  * RTCM 상수

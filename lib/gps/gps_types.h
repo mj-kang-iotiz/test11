@@ -30,6 +30,17 @@ typedef enum {
 } gps_nmea_msg_t;
 
 /**
+ * @brief RTCM 메시지 타입 (X-Macro로 자동 생성)
+ */
+typedef enum {
+  GPS_RTCM_MSG_NONE = 0,
+#define X(name, msg_type, description) GPS_RTCM_MSG_##name = msg_type,
+  RTCM_MSG_TABLE(X)
+#undef X
+  GPS_RTCM_MSG_UNKNOWN = 0xFFFF
+} gps_rtcm_msg_t;
+
+/**
  * @brief GPS 메시지 정보 (이벤트 핸들러용)
  */
 typedef struct {
