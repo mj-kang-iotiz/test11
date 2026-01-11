@@ -31,7 +31,7 @@ typedef enum {
 /*===========================================================================
  * 프로토콜 타입
  *===========================================================================*/
-typedef enum {
+typedef enum gps_protocol_e {
     GPS_PROTOCOL_NONE = 0,
     GPS_PROTOCOL_NMEA,            /**< $GPGGA, $GNGGA 등 NMEA-0183 */
     GPS_PROTOCOL_UNICORE_CMD,     /**< $command,response:OK*XX (설정 명령어) */
@@ -40,13 +40,17 @@ typedef enum {
 } gps_protocol_t;
 
 /*===========================================================================
- * 이벤트 타입
+ * 고수준 이벤트 타입 (애플리케이션 중심)
  *===========================================================================*/
-typedef enum {
+typedef enum gps_event_type_e {
     GPS_EVENT_NONE = 0,
-    GPS_EVENT_DATA_PARSED,        /**< 데이터 파싱 완료 (URC) */
-    GPS_EVENT_CMD_RESPONSE,       /**< 명령어 응답 수신 */
-} gps_event_t;
+    GPS_EVENT_POSITION_UPDATED,   /**< 위치 업데이트 (GGA, BESTNAV, BESTPOS) */
+    GPS_EVENT_HEADING_UPDATED,    /**< 헤딩 업데이트 (THS, HEADING2) */
+    GPS_EVENT_VELOCITY_UPDATED,   /**< 속도 업데이트 (RMC, BESTVEL) */
+    GPS_EVENT_SATELLITE_UPDATED,  /**< 위성 정보 업데이트 (GSA, GSV) */
+    GPS_EVENT_RTCM_RECEIVED,      /**< RTCM 데이터 수신 (LoRa 전송용) */
+    GPS_EVENT_CMD_RESPONSE,       /**< 명령어 응답 수신 (OK/ERROR) */
+} gps_event_type_t;
 
 /*===========================================================================
  * 명령어 응답 대기 컨텍스트
