@@ -336,18 +336,18 @@ static bool gps_app_destroy(gps_id_t id) {
 }
 
 /**
- * @brief 모든 GPS 앱 태스크 생성 및 초기화
+ * @brief GPS 앱 시작
  */
-void gps_app_start_all(void) {
+void gps_app_start(void) {
   const board_config_t *config = board_get_config();
 
-  LOG_INFO("GPS 앱 전체 시작");
+  LOG_INFO("GPS 앱 시작");
 
   for (uint8_t i = 0; i < config->gps_cnt && i < GPS_ID_MAX; i++) {
     gps_app_create((gps_id_t)i);
   }
 
-  LOG_INFO("GPS 앱 전체 시작 완료");
+  LOG_INFO("GPS 앱 시작 완료");
 
   // Base Auto-Fix 초기화 (필요시)
   if (config->board == BOARD_TYPE_BASE_UM982) {
@@ -369,10 +369,10 @@ void gps_app_start_all(void) {
 }
 
 /**
- * @brief 모든 GPS 앱 태스크 종료 및 정리
+ * @brief GPS 앱 종료
  */
-void gps_app_stop_all(void) {
-  LOG_INFO("GPS 앱 전체 종료");
+void gps_app_stop(void) {
+  LOG_INFO("GPS 앱 종료");
 
   for (uint8_t i = 0; i < GPS_ID_MAX; i++) {
     if (gps_instances[i].enabled) {
@@ -380,7 +380,7 @@ void gps_app_stop_all(void) {
     }
   }
 
-  LOG_INFO("GPS 앱 전체 종료 완료");
+  LOG_INFO("GPS 앱 종료 완료");
 }
 
 /*===========================================================================

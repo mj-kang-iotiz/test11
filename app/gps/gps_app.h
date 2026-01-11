@@ -37,23 +37,23 @@ bool gps_init_um982_rover_async(gps_id_t id, gps_init_callback_t callback);
 bool gps_configure_um982_base_mode_async(gps_id_t id, gps_init_callback_t callback, void *user_data);
 
 /**
- * @brief 모든 GPS 앱 태스크 시작
+ * @brief GPS 앱 시작
  *
  * board_config.h의 설정을 읽어서 자동으로 GPS 앱 태스크 생성
  */
-void gps_app_start_all(void);
+void gps_app_start(void);
 
 /**
- * @brief 모든 GPS 앱 태스크 종료
+ * @brief GPS 앱 종료
  *
- * 모든 GPS 앱 태스크를 안전하게 종료하고 리소스 정리
+ * GPS 앱 태스크를 안전하게 종료하고 리소스 정리
  */
-void gps_app_stop_all(void);
+void gps_app_stop(void);
 
 /**
- * @brief 레거시 호환용 (gps_init_all → gps_app_start_all)
+ * @brief 레거시 호환용 (gps_init_all → gps_app_start)
  */
-#define gps_init_all() gps_app_start_all()
+#define gps_init_all() gps_app_start()
 
 /**
  * @brief GPS 태스크 생성 (레거시 호환용)
