@@ -191,6 +191,10 @@ parse_result_t unicore_ascii_try_parse(gps_t *gps, ringbuffer_t *rb) {
     const char *resp_str = strstr(buf, "response:");
     if (resp_str) {
         resp_str += 9;  /* "response:" 길이 */
+
+        /* 응답 전체 메시지 로그 출력 (명령어 초기화 시 확인용) */
+        LOG_INFO("UM982 <- %s", resp_str);
+
         if (strncmp(resp_str, "OK", 2) == 0) {
             resp = GPS_UNICORE_RESP_OK;
         } else if (strncmp(resp_str, "ERROR", 5) == 0) {
