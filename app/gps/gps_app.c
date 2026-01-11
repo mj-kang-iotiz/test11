@@ -111,7 +111,7 @@ static void gps_evt_handler(gps_t *gps, const gps_event_t *event) {
               event->data.position.altitude, event->data.position.fix_type);
 
     // Base 모드: Fix 변경 시 base_auto_fix 모듈에 알림
-    if (config->board == BOARD_TYPE_BASE_F9P || config->board == BOARD_TYPE_BASE_UM982) {
+    if (config->board == BOARD_TYPE_BASE_UM982) {
       if (event->data.position.fix_type != inst->last_fix) {
         base_auto_fix_on_gps_fix_changed(event->data.position.fix_type);
         inst->last_fix = event->data.position.fix_type;
@@ -269,9 +269,7 @@ void gps_init_all(void) {
     gps_type_t type = config->gps[i];
 
     LOG_INFO("GPS[%d] 타입: %s", i,
-             type == GPS_TYPE_F9P     ? "F9P"
-             : type == GPS_TYPE_UM982 ? "UM982"
-                                      : "UNKNOWN");
+             type == GPS_TYPE_UM982 ? "UM982" : "UNKNOWN");
 
     if (gps_instances[i].enabled) {
       LOG_WARN("GPS[%d] 이미 초기화됨, 스킵", i);
@@ -307,7 +305,7 @@ void gps_init_all(void) {
   LOG_INFO("GPS 전체 인스턴스 초기화 완료");
 
   // Base Auto-Fix 초기화 (필요시)
-  if (config->board == BOARD_TYPE_BASE_F9P || config->board == BOARD_TYPE_BASE_UM982) {
+  if (config->board == BOARD_TYPE_BASE_UM982) {
     user_params_t *params = flash_params_get_current();
     if (params->base_auto_fix_enabled) {
       LOG_INFO("Base Auto-Fix 모드 활성화");
