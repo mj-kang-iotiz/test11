@@ -153,7 +153,7 @@ static ble_parse_result_t ble_parser_classify_line(const char *line)
         if (strncmp(line, "+OK", 3) == 0) {
             return BLE_PARSE_RESULT_AT_OK;
         }
-        if (strncmp(line, "+ERROR", 6) == 0) {
+        if (strncmp(line, "+ERROR", 6) == 0 || strncmp(line, "+ERR", 4) == 0) {
             return BLE_PARSE_RESULT_AT_ERROR;
         }
         if (strncmp(line, "+READY", 6) == 0) {

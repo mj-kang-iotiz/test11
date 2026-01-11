@@ -300,49 +300,22 @@ ble_mode_t ble_app_get_mode(void)
 /**
  * @brief RX 태스크
  *
- * DMA 버퍼에서 데이터를 읽어 링버퍼에 쓰고,
- * 링버퍼에서 읽어 파싱 (GPS 구조와 동일)
+ * 인터럽트에서 DMA→링버퍼 쓰기 완료 후 신호 수신
+ * 태스크는 링버퍼에서 읽어 파싱만 수행 (GPS 구조와 동일)
  */
 static void ble_rx_task(void *pvParameter)
 {
     ble_instance_t *inst = (ble_instance_t *)pvParameter;
     uint8_t dummy;
-    size_t old_pos = 0;
-    size_t pos;
 
     LOG_INFO("BLE RX 태스크 시작");
 
     while (inst->running) {
         /* RX 신호 대기 (타임아웃 100ms) */
-        xQueueReceive(inst->rx_queue, &dummy, pdMS_TO_TICKS(100));
-
-        /* DMA 버퍼에서 새 데이터 확인 */
-        pos = ble_port_get_rx_pos();
-        char *dma_buf = ble_port_get_recv_buf();
-
-        if (pos != old_pos) {
-            if (pos > old_pos) {
-                /* 선형 데이터 → 링버퍼에 쓰기 */
-                size_t len = pos - old_pos;
-                ble_rx_write(&inst->ble, (const uint8_t *)&dma_buf[old_pos], len);
-            } else {
-                /* 래핑된 데이터 → 링버퍼에 쓰기 */
-                size_t len1 = BLE_RX_BUF_SIZE - old_pos;
-                ble_rx_write(&inst->ble, (const uint8_t *)&dma_buf[old_pos], len1);
-
-                if (pos > 0) {
-                    ble_rx_write(&inst->ble, (const uint8_t *)dma_buf, pos);
-                }
-            }
-
-            old_pos = pos;
-            if (old_pos >= BLE_RX_BUF_SIZE) {
-                old_pos = 0;
-            }
+        if (xQueueReceive(inst->rx_queue, &dummy, pdMS_TO_TICKS(100)) == pdTRUE) {
+            /* 링버퍼에서 읽어서 파싱 */
+            ble_process_rx(&inst->ble);
         }
-
-        /* 링버퍼에서 읽어서 파싱 */
-        ble_process_rx(&inst->ble);
     }
 
     LOG_INFO("BLE RX 태스크 종료");
