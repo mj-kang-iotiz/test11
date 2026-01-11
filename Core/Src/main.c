@@ -150,7 +150,7 @@ void initThread(void *pvParameter) {
 
   if(config->use_ble)
   {
-	  ble_init_all();
+	  ble_app_start();
   }
 
   vTaskDelete(NULL);

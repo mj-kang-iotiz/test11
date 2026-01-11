@@ -1,150 +1,155 @@
 #ifndef BLE_APP_H
 #define BLE_APP_H
 
+/**
+ * @file ble_app.h
+ * @brief BLE 애플리케이션 헤더
+ *
+ * BLE 앱 레벨 기능:
+ * - BLE 앱 시작/종료 (gps_app_start/stop 참고)
+ * - RX 태스크 관리
+ * - 모듈 초기화 시퀀스
+ * - 외부 명령어 처리 (ble_cmd.h/c)
+ */
+
 #include "FreeRTOS.h"
 #include "queue.h"
 #include "semphr.h"
 #include "task.h"
 #include "ble.h"
+
 #include <stdbool.h>
 #include <stdint.h>
 
-#define BLE_UART_MAX_RECV_SIZE 1024
-#define BLE_AT_RESPONSE_MAX_SIZE 256
+/*===========================================================================
+ * BLE 앱 인스턴스 (gps_instance_t 참고)
+ *===========================================================================*/
+typedef struct {
+    ble_t ble;                      /**< BLE 핸들 (lib/ble) */
 
-typedef enum
-{
-  BLE_CMD_PARSE_STATE_NONE,
-  BLE_CMD_PARSE_STATE_GOT_A,
-  BLE_CMD_PARSE_STATE_DATA,
-  BLE_CMD_PARSE_STATE_APP,
-} ble_cmd_parse_state_t;
-typedef enum
-{
-  BLE_AT_STATUS_IDLE,
-  BLE_AT_STATUS_PENDING,
-  BLE_AT_STATUS_COMPLETED,
-  BLE_AT_STATUS_TIMEOUT,
-  BLE_AT_STATUS_ERROR,
-} ble_at_status_t;
+    TaskHandle_t rx_task;           /**< RX 태스크 핸들 */
+    QueueHandle_t rx_queue;         /**< RX 신호 큐 */
 
-typedef enum
-{
-  BLE_MODE_BYPASS, // 일반 UART 통신 모드 (파싱 비활성화)
-  BLE_MODE_AT,     // AT 커맨드 모드 (파싱 활성화)
-} ble_mode_t;
+    bool enabled;                   /**< 활성화 상태 */
+    bool running;                   /**< 실행 중 상태 */
 
-typedef enum
-{
-  BLE_CONN_DISCONNECTED,
-  BLE_CONN_CONNECTED,
-} ble_connection_state_t;
-
-// Bypass 모드 RX 데이터 콜백
-typedef void (*ble_bypass_rx_callback_t)(const uint8_t *data, size_t len);
-
-typedef void (*ble_at_command_callback_t)(bool result, void *user_data);
-
-typedef struct
-{
-  char command[128];                  // AT 명령어
-  ble_at_command_callback_t callback; // 완료 콜백
-  void *user_data;                    // 사용자 데이터
-  TickType_t start_tick;              // 시작 시각
-  TickType_t timeout_ticks;           // 타임아웃 (ticks)
-  bool is_active;                     // 활성 상태
-} ble_async_at_cmd_t;
-
-typedef struct
-{
-  char expected_response[32];                  // 기대하는 응답 문자열 (예: "+OK", "+ERROR")
-  char response_buf[BLE_AT_RESPONSE_MAX_SIZE]; // 실제 받은 응답
-  size_t response_len;
-  SemaphoreHandle_t wait_sem; // 응답 대기용 세마포어
-  ble_at_status_t status;
-  TickType_t timeout_ticks; // 타임아웃 (ticks)
-} ble_async_at_request_t;
-
-typedef struct
-{
-  char data[512];
-  size_t len;
-  bool is_at;
-} ble_tx_request_t;
-
-typedef struct
-{
-  char data[100];
-  size_t pos;
-  char prev_char;
-} ble_cmd_parser_t;
-
-typedef struct
-{
-  ble_t ble;
-  ble_cmd_parse_state_t parse_stae;
-  ble_cmd_parser_t parser;
-  QueueHandle_t rx_queue;
-  TaskHandle_t rx_task;
-  bool enabled;
-
-  QueueHandle_t tx_queue;
-  TaskHandle_t tx_task;
-
-  SemaphoreHandle_t mutex;
-
-  // 비동기 AT 커맨드 요청
-  ble_async_at_request_t *async_request;
-
-  // 모드 및 연결 상태
-  ble_mode_t current_mode;           // 현재 모드 (AT/Bypass)
-  ble_connection_state_t conn_state; // BLE 연결 상태
-
-  // Bypass 모드 데이터 수신 콜백
-  ble_bypass_rx_callback_t bypass_rx_callback;
-  ble_async_at_cmd_t async_at_cmd;
 } ble_instance_t;
 
-void ble_init_all(void);
+/*===========================================================================
+ * 앱 시작/종료 API (gps_app_start/stop 참고)
+ *===========================================================================*/
 
-ble_t *ble_get_handle(void);
-ble_instance_t *ble_get_instance(void);
-bool ble_send(const char *data, size_t len, bool is_at);
+/**
+ * @brief BLE 앱 시작
+ *
+ * board_config.h 설정을 읽어서 BLE 앱 시작
+ * - HAL 초기화
+ * - RX 태스크 생성
+ * - 모듈 초기 설정 (디바이스 이름 등)
+ */
+void ble_app_start(void);
 
-// 비동기 AT 커맨드 전송 (응답 대기)
-ble_at_status_t ble_send_at_command_async(const char *at_cmd, const char *expected_response,
-                                          char *response_buf, size_t response_buf_size,
-                                          uint32_t timeout_ms);
+/**
+ * @brief BLE 앱 종료
+ *
+ * BLE 앱을 안전하게 종료하고 리소스 정리
+ */
+void ble_app_stop(void);
 
-// BLE 디바이스 이름 설정 (AT+MANUF=<name>)
-bool ble_set_device_name_async(const char *device_name, uint32_t timeout_ms);
+/*===========================================================================
+ * BLE 핸들/인스턴스 API
+ *===========================================================================*/
 
-// BLE UART 통신 속도 설정 (AT+UART=<baudrate>)
-bool ble_set_uart_baudrate_async(uint32_t baudrate, uint32_t timeout_ms);
+/**
+ * @brief BLE 핸들 가져오기
+ * @return BLE 핸들 포인터 (NULL: 비활성화)
+ */
+ble_t *ble_app_get_handle(void);
 
-// BLE 초기 설정 시퀀스 (디바이스 이름 + UART 속도 설정)
-// 설정 완료 후 자동으로 Bypass 모드로 전환됨
-bool ble_configure_async(const char *device_name, uint32_t baudrate);
+/**
+ * @brief BLE 인스턴스 가져오기
+ * @return BLE 인스턴스 포인터
+ */
+ble_instance_t *ble_app_get_instance(void);
 
-// BLE 연결 상태 조회
-ble_connection_state_t ble_get_connection_state(void);
+/*===========================================================================
+ * 데이터 송수신 API
+ *===========================================================================*/
 
-// BLE 연결 상태 변경 (GPIO 인터럽트에서 호출)
-void ble_set_connection_state(ble_connection_state_t state);
+/**
+ * @brief 데이터 전송 (Bypass 모드)
+ *
+ * 외부 PC로 데이터 전송
+ *
+ * @param data 전송 데이터
+ * @param len 데이터 길이
+ * @return true: 성공
+ */
+bool ble_app_send(const char *data, size_t len);
 
-// 현재 모드 조회
-ble_mode_t ble_get_current_mode(void);
+/*===========================================================================
+ * AT 명령어 API (동기)
+ *===========================================================================*/
 
-// Bypass 모드 RX 콜백 등록 (Bypass 모드에서 수신된 데이터를 전달받음)
-void ble_set_bypass_rx_callback(ble_bypass_rx_callback_t callback);
-bool ble_get_device_name_async(char *device_name_buf, size_t buf_size, uint32_t timeout_ms);
+/**
+ * @brief 디바이스 이름 설정
+ * @param name 디바이스 이름
+ * @param timeout_ms 타임아웃 (ms)
+ * @return true: 성공
+ */
+bool ble_app_set_device_name(const char *name, uint32_t timeout_ms);
 
-bool ble_send_at_cmd_truly_async(const char *at_cmd, ble_at_command_callback_t callback,
-                                 void *user_data, uint32_t timeout_ms);
-bool ble_set_manuf_async(const char *device_name, ble_at_command_callback_t callback,
-                         void *user_data, uint32_t timeout_ms);
-// AT+DISCONNECT 비동기 전송
+/**
+ * @brief 디바이스 이름 조회
+ * @param name_buf 이름 버퍼
+ * @param buf_size 버퍼 크기
+ * @param timeout_ms 타임아웃 (ms)
+ * @return true: 성공
+ */
+bool ble_app_get_device_name(char *name_buf, size_t buf_size, uint32_t timeout_ms);
 
-bool ble_disconnect_async(ble_at_command_callback_t callback, void *user_data, uint32_t timeout_ms);
+/**
+ * @brief UART 속도 설정
+ * @param baudrate 속도 (예: 115200)
+ * @param timeout_ms 타임아웃 (ms)
+ * @return true: 성공
+ */
+bool ble_app_set_uart_baudrate(uint32_t baudrate, uint32_t timeout_ms);
 
-#endif
+/**
+ * @brief Advertising 시작
+ * @param timeout_ms 타임아웃 (ms)
+ * @return true: 성공
+ */
+bool ble_app_start_advertising(uint32_t timeout_ms);
+
+/**
+ * @brief 연결 해제
+ * @param timeout_ms 타임아웃 (ms)
+ * @return true: 성공
+ */
+bool ble_app_disconnect(uint32_t timeout_ms);
+
+/*===========================================================================
+ * 상태 조회 API
+ *===========================================================================*/
+
+/**
+ * @brief 연결 상태 조회
+ * @return 연결 상태
+ */
+ble_conn_state_t ble_app_get_conn_state(void);
+
+/**
+ * @brief 연결 상태 설정 (GPIO 인터럽트에서 호출)
+ * @param state 연결 상태
+ */
+void ble_app_set_conn_state(ble_conn_state_t state);
+
+/**
+ * @brief 현재 모드 조회
+ * @return 현재 모드
+ */
+ble_mode_t ble_app_get_mode(void);
+
+#endif /* BLE_APP_H */

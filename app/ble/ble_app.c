@@ -1,9 +1,16 @@
+/**
+ * @file ble_app.c
+ * @brief BLE 애플리케이션 구현
+ */
+
 #include "ble_app.h"
-#include "board_config.h"
-#include "ble.h"
 #include "ble_port.h"
-#include <string.h>
+#include "ble_cmd.h"
+#include "board_config.h"
 #include "flash_params.h"
+
+#include <string.h>
+#include <stdio.h>
 
 #ifndef TAG
 #define TAG "BLE_APP"
@@ -11,828 +18,380 @@
 
 #include "log.h"
 
-static void ble_check_async_at_timeout(void);
-bool ble_set_advon_async(uint32_t timeout_ms);
-
-void ble_cmd_parse_process(ble_instance_t *inst, const void *data, size_t len)
-{
-  const uint8_t *d = data;
-
-  for (; len > 0; ++d, --len)
-  {
-    if (inst->parse_stae == BLE_CMD_PARSE_STATE_NONE)
-    {
-      if (*d == '\r' || *d == '\n')
-      {
-        continue;
-      }
-
-      if (*d == '+')
-      {
-        inst->parser.pos = 0;
-        inst->parser.data[inst->parser.pos++] = (char)(*d);
-        inst->parser.data[inst->parser.pos] = '\0';
-        inst->parse_stae = BLE_CMD_PARSE_STATE_DATA;
-      }
-      else if (*d == 'A')
-      {
-        inst->parser.pos = 0;
-        inst->parser.data[inst->parser.pos++] = (char)(*d);
-        inst->parser.data[inst->parser.pos] = '\0';
-        inst->parse_stae = BLE_CMD_PARSE_STATE_GOT_A;
-      }
-      else
-      {
-        inst->parser.pos = 0;
-        inst->parser.data[inst->parser.pos++] = (char)(*d);
-        inst->parser.data[inst->parser.pos] = '\0';
-        inst->parse_stae = BLE_CMD_PARSE_STATE_APP;
-      }
-    }
-    else if (inst->parse_stae == BLE_CMD_PARSE_STATE_GOT_A)
-    {
-      if (*d == 'T')
-      {
-        inst->parser.data[inst->parser.pos++] = (char)(*d);
-        inst->parser.data[inst->parser.pos] = '\0';
-        inst->parse_stae = BLE_CMD_PARSE_STATE_DATA;
-      }
-      else
-      {
-        inst->parser.pos = 0;
-        inst->parser.data[inst->parser.pos] = '\0';
-        inst->parse_stae = BLE_CMD_PARSE_STATE_NONE;
-
-        if (*d == '+')
-        {
-          inst->parser.data[inst->parser.pos++] = (char)(*d);
-          inst->parse_stae = BLE_CMD_PARSE_STATE_DATA;
-        }
-      }
-    }
-    else if (inst->parse_stae == BLE_CMD_PARSE_STATE_DATA || inst->parse_stae == BLE_CMD_PARSE_STATE_APP)
-    {
-      if (inst->parser.pos < sizeof(inst->parser.data) - 1)
-      {
-        inst->parser.data[inst->parser.pos++] = (char)(*d);
-        inst->parser.data[inst->parser.pos] = '\0';
-      }
-      else
-      {
-        inst->parser.pos = 0;
-        inst->parser.data[inst->parser.pos] = '\0';
-        inst->parser.prev_char = '\0';
-        inst->parse_stae = BLE_CMD_PARSE_STATE_NONE;
-      }
-
-      if (*d == '\r' || *d == '\n')
-      {
-        inst->parser.data[inst->parser.pos - 1] = '\0'; // \r 제거
-        LOG_INFO("BLE AT Command received: %s", inst->parser.data);
-
-        if (inst->parse_stae == BLE_CMD_PARSE_STATE_DATA)
-        {
-          ble_at_cmd_handler(inst);
-        }
-        else
-        {
-          ble_app_cmd_handler(inst);
-        }
-
-        inst->parser.prev_char = '\0';
-        inst->parser.pos = 0;
-        inst->parse_stae = BLE_CMD_PARSE_STATE_NONE;
-      }
-      inst->parser.prev_char = (char)(*d);
-    }
-  }
-}
-
+/*===========================================================================
+ * 정적 변수
+ *===========================================================================*/
 static ble_instance_t ble_instance = {0};
 
-static void ble_tx_task(void *pvParameter)
+/*===========================================================================
+ * 내부 함수 선언
+ *===========================================================================*/
+static void ble_rx_task(void *pvParameter);
+static void ble_evt_handler(ble_t *ble, const ble_event_t *event);
+
+/*===========================================================================
+ * 앱 시작/종료 API
+ *===========================================================================*/
+
+void ble_app_start(void)
 {
-  ble_instance_t *inst = (ble_instance_t *)pvParameter;
-  ble_tx_request_t tx_req;
+    const board_config_t *config = board_get_config();
 
-  LOG_INFO("BLE TX Task started");
-  user_params_t *params = flash_params_get_current();
+    LOG_INFO("BLE 앱 시작 - 보드: %d", config->board);
 
-  while (1)
-  {
-    if (xQueueReceive(inst->tx_queue, &tx_req, portMAX_DELAY) == pdTRUE)
-    {
-      LOG_DEBUG("BLE Sending %d bytes", tx_req.len);
-
-      xSemaphoreTake(inst->mutex, portMAX_DELAY);
-
-      if (inst->ble.ops && inst->ble.ops->send)
-      {
-        if (tx_req.is_at == true)
-        {
-          inst->ble.ops->at_mode();
-        }
-        inst->ble.ops->send(tx_req.data, tx_req.len);
-
-        if (tx_req.is_at == true)
-        {
-          vTaskDelay(pdMS_TO_TICKS(10));
-          inst->ble.ops->bypass_mode();
-        }
-        LOG_DEBUG("BLE TX complete");
-      }
-      else
-      {
-        LOG_ERR("BLE send ops not available");
-      }
-
-      xSemaphoreGive(inst->mutex);
+    if (!config->use_ble) {
+        LOG_INFO("BLE 사용 안함");
+        return;
     }
-  }
 
-  vTaskDelete(NULL);
+    /* 포트 초기화 (HAL ops 설정, 링버퍼 초기화) */
+    if (ble_port_init_instance(&ble_instance.ble) != 0) {
+        LOG_ERR("BLE 포트 초기화 실패");
+        return;
+    }
+
+    /* RX 큐 생성 (IDLE 인터럽트 신호용) */
+    ble_instance.rx_queue = xQueueCreate(10, sizeof(uint8_t));
+    if (!ble_instance.rx_queue) {
+        LOG_ERR("BLE RX 큐 생성 실패");
+        return;
+    }
+
+    ble_port_set_queue(ble_instance.rx_queue);
+
+    /* BLE 핸들 포인터 전달 (ble_port에서 링버퍼 접근용) */
+    ble_port_set_ble_handle(&ble_instance.ble);
+
+    /* 이벤트 핸들러 설정 */
+    ble_set_evt_handler(&ble_instance.ble, ble_evt_handler, &ble_instance);
+
+    /* 포트 시작 (UART DMA 활성화) */
+    ble_port_start(&ble_instance.ble);
+
+    /* RX 태스크 생성 */
+    BaseType_t ret = xTaskCreate(ble_rx_task, "ble_rx", 512,
+                                  &ble_instance, tskIDLE_PRIORITY + 1,
+                                  &ble_instance.rx_task);
+    if (ret != pdPASS) {
+        LOG_ERR("BLE RX 태스크 생성 실패");
+        vQueueDelete(ble_instance.rx_queue);
+        return;
+    }
+
+    ble_instance.enabled = true;
+    ble_instance.running = true;
+
+    LOG_INFO("BLE 앱 시작 완료");
 }
 
+void ble_app_stop(void)
+{
+    if (!ble_instance.enabled) {
+        return;
+    }
+
+    LOG_INFO("BLE 앱 종료 시작");
+
+    ble_instance.running = false;
+
+    /* 포트 종료 */
+    ble_port_stop(&ble_instance.ble);
+
+    /* RX 태스크 종료 대기 */
+    if (ble_instance.rx_task) {
+        vTaskDelay(pdMS_TO_TICKS(100));
+        vTaskDelete(ble_instance.rx_task);
+        ble_instance.rx_task = NULL;
+    }
+
+    /* 큐 삭제 */
+    if (ble_instance.rx_queue) {
+        vQueueDelete(ble_instance.rx_queue);
+        ble_instance.rx_queue = NULL;
+    }
+
+    ble_instance.enabled = false;
+
+    LOG_INFO("BLE 앱 종료 완료");
+}
+
+/*===========================================================================
+ * BLE 핸들/인스턴스 API
+ *===========================================================================*/
+
+ble_t *ble_app_get_handle(void)
+{
+    if (!ble_instance.enabled) {
+        return NULL;
+    }
+    return &ble_instance.ble;
+}
+
+ble_instance_t *ble_app_get_instance(void)
+{
+    return &ble_instance;
+}
+
+/*===========================================================================
+ * 데이터 송수신 API
+ *===========================================================================*/
+
+bool ble_app_send(const char *data, size_t len)
+{
+    if (!ble_instance.enabled) {
+        LOG_ERR("BLE not enabled");
+        return false;
+    }
+
+    return ble_send(&ble_instance.ble, data, len);
+}
+
+/*===========================================================================
+ * AT 명령어 API (동기)
+ *===========================================================================*/
+
+bool ble_app_set_device_name(const char *name, uint32_t timeout_ms)
+{
+    if (!ble_instance.enabled || !name) {
+        return false;
+    }
+
+    char cmd[128];
+    snprintf(cmd, sizeof(cmd), "AT+MANUF=%s\r", name);
+
+    ble_at_status_t status = ble_send_at_cmd_sync(&ble_instance.ble, cmd,
+                                                   NULL, 0, timeout_ms);
+
+    if (status == BLE_AT_STATUS_COMPLETED) {
+        LOG_INFO("디바이스 이름 설정 완료: %s", name);
+        return true;
+    }
+
+    LOG_ERR("디바이스 이름 설정 실패: %d", status);
+    return false;
+}
+
+bool ble_app_get_device_name(char *name_buf, size_t buf_size, uint32_t timeout_ms)
+{
+    if (!ble_instance.enabled || !name_buf || buf_size == 0) {
+        return false;
+    }
+
+    char response[BLE_AT_RESPONSE_MAX];
+    ble_at_status_t status = ble_send_at_cmd_sync(&ble_instance.ble,
+                                                   "AT+MANUF?\r",
+                                                   response, sizeof(response),
+                                                   timeout_ms);
+
+    if (status == BLE_AT_STATUS_COMPLETED) {
+        /* 응답에서 이름 추출: +MANUF:NAME 또는 NAME */
+        const char *param = ble_parser_get_at_param(response);
+        if (param) {
+            strncpy(name_buf, param, buf_size - 1);
+            name_buf[buf_size - 1] = '\0';
+        } else {
+            strncpy(name_buf, response, buf_size - 1);
+            name_buf[buf_size - 1] = '\0';
+        }
+        return true;
+    }
+
+    return false;
+}
+
+bool ble_app_set_uart_baudrate(uint32_t baudrate, uint32_t timeout_ms)
+{
+    if (!ble_instance.enabled) {
+        return false;
+    }
+
+    char cmd[64];
+    snprintf(cmd, sizeof(cmd), "AT+UART=%lu\r", baudrate);
+
+    ble_at_status_t status = ble_send_at_cmd_sync(&ble_instance.ble, cmd,
+                                                   NULL, 0, timeout_ms);
+
+    if (status == BLE_AT_STATUS_COMPLETED) {
+        LOG_INFO("UART 속도 설정 완료: %lu", baudrate);
+        return true;
+    }
+
+    LOG_ERR("UART 속도 설정 실패: %d", status);
+    return false;
+}
+
+bool ble_app_start_advertising(uint32_t timeout_ms)
+{
+    if (!ble_instance.enabled) {
+        return false;
+    }
+
+    ble_at_status_t status = ble_send_at_cmd_sync(&ble_instance.ble,
+                                                   "AT+ADVON\r",
+                                                   NULL, 0, timeout_ms);
+
+    if (status == BLE_AT_STATUS_COMPLETED) {
+        LOG_INFO("Advertising 시작 완료");
+        return true;
+    }
+
+    LOG_ERR("Advertising 시작 실패: %d", status);
+    return false;
+}
+
+bool ble_app_disconnect(uint32_t timeout_ms)
+{
+    if (!ble_instance.enabled) {
+        return false;
+    }
+
+    ble_at_status_t status = ble_send_at_cmd_sync(&ble_instance.ble,
+                                                   "AT+DISCONNECT\r",
+                                                   NULL, 0, timeout_ms);
+
+    if (status == BLE_AT_STATUS_COMPLETED) {
+        LOG_INFO("연결 해제 완료");
+        return true;
+    }
+
+    LOG_ERR("연결 해제 실패: %d", status);
+    return false;
+}
+
+/*===========================================================================
+ * 상태 조회 API
+ *===========================================================================*/
+
+ble_conn_state_t ble_app_get_conn_state(void)
+{
+    if (!ble_instance.enabled) {
+        return BLE_CONN_DISCONNECTED;
+    }
+    return ble_get_conn_state(&ble_instance.ble);
+}
+
+void ble_app_set_conn_state(ble_conn_state_t state)
+{
+    if (!ble_instance.enabled) {
+        return;
+    }
+
+    ble_set_conn_state(&ble_instance.ble, state);
+
+    if (state == BLE_CONN_CONNECTED) {
+        LOG_INFO("BLE Connected");
+    } else {
+        LOG_INFO("BLE Disconnected");
+    }
+}
+
+ble_mode_t ble_app_get_mode(void)
+{
+    if (!ble_instance.enabled) {
+        return BLE_MODE_BYPASS;
+    }
+    return ble_get_mode(&ble_instance.ble);
+}
+
+/*===========================================================================
+ * 내부 함수 구현
+ *===========================================================================*/
+
+/**
+ * @brief RX 태스크
+ *
+ * DMA 버퍼에서 데이터를 읽어 링버퍼에 쓰고,
+ * 링버퍼에서 읽어 파싱 (GPS 구조와 동일)
+ */
 static void ble_rx_task(void *pvParameter)
 {
-  ble_instance_t *inst = (ble_instance_t *)pvParameter;
+    ble_instance_t *inst = (ble_instance_t *)pvParameter;
+    uint8_t dummy;
+    size_t old_pos = 0;
+    size_t pos;
 
-  size_t pos = 0;
-  size_t old_pos = 0;
-  uint8_t dummy = 0;
-  size_t total_received = 0;
+    LOG_INFO("BLE RX 태스크 시작");
 
-  LOG_INFO("BLE RX Task started");
+    while (inst->running) {
+        /* RX 신호 대기 (타임아웃 100ms) */
+        xQueueReceive(inst->rx_queue, &dummy, pdMS_TO_TICKS(100));
 
-  while (1)
-  {
-    xQueueReceive(inst->rx_queue, &dummy, pdMS_TO_TICKS(100));
-    xSemaphoreTake(inst->mutex, portMAX_DELAY);
-    ble_check_async_at_timeout();
+        /* DMA 버퍼에서 새 데이터 확인 */
+        pos = ble_port_get_rx_pos();
+        char *dma_buf = ble_port_get_recv_buf();
 
-    pos = ble_port_get_rx_pos();
-    char *ble_recv = ble_port_get_recv_buf();
+        if (pos != old_pos) {
+            if (pos > old_pos) {
+                /* 선형 데이터 → 링버퍼에 쓰기 */
+                size_t len = pos - old_pos;
+                ble_rx_write(&inst->ble, (const uint8_t *)&dma_buf[old_pos], len);
+            } else {
+                /* 래핑된 데이터 → 링버퍼에 쓰기 */
+                size_t len1 = BLE_RX_BUF_SIZE - old_pos;
+                ble_rx_write(&inst->ble, (const uint8_t *)&dma_buf[old_pos], len1);
 
-    if (pos != old_pos)
-    {
-      if (pos > old_pos)
-      {
-        size_t len = pos - old_pos;
-        total_received = len;
-        LOG_DEBUG_RAW("BLE RX: ", &ble_recv[old_pos], len);
-        // 항상 파싱 (AT 응답 또는 앱 커맨드 처리)
-        ble_cmd_parse_process(inst, &ble_recv[old_pos], len);
+                if (pos > 0) {
+                    ble_rx_write(&inst->ble, (const uint8_t *)dma_buf, pos);
+                }
+            }
 
-        // Bypass 모드에서는 콜백도 호출 (raw 데이터 전달)
-        if (inst->current_mode == BLE_MODE_BYPASS && inst->bypass_rx_callback != NULL)
-        {
-          inst->bypass_rx_callback((const uint8_t *)&ble_recv[old_pos], len);
-        }
-      }
-      else
-      {
-        size_t len1 = BLE_UART_MAX_RECV_SIZE - old_pos;
-        size_t len2 = pos;
-        total_received = len1 + len2;
-        LOG_DEBUG_RAW("BLE RX: ", &ble_recv[old_pos], len1);
-        // 항상 파싱 (AT 응답 또는 앱 커맨드 처리)
-        ble_cmd_parse_process(inst, &ble_recv[old_pos],
-                              BLE_UART_MAX_RECV_SIZE - old_pos);
-        if (pos > 0)
-        {
-          LOG_DEBUG_RAW("BLE RX: ", ble_recv, len2);
-          ble_cmd_parse_process(inst, ble_recv, pos);
+            old_pos = pos;
+            if (old_pos >= BLE_RX_BUF_SIZE) {
+                old_pos = 0;
+            }
         }
 
-        // Bypass 모드에서는 콜백도 호출 (raw 데이터 전달)
-        if (inst->current_mode == BLE_MODE_BYPASS && inst->bypass_rx_callback != NULL)
-        {
-          inst->bypass_rx_callback((const uint8_t *)&ble_recv[old_pos], len1);
-          if (pos > 0)
-          {
-            inst->bypass_rx_callback((const uint8_t *)ble_recv, len2);
-          }
-        }
-      }
-      old_pos = pos;
-      if (old_pos == BLE_UART_MAX_RECV_SIZE)
-      {
-        old_pos = 0;
-      }
+        /* 링버퍼에서 읽어서 파싱 */
+        ble_process_rx(&inst->ble);
     }
 
-    xSemaphoreGive(inst->mutex);
-  }
-
-  vTaskDelete(NULL);
+    LOG_INFO("BLE RX 태스크 종료");
+    vTaskDelete(NULL);
 }
 
-void ble_init_all(void)
+/**
+ * @brief BLE 이벤트 핸들러
+ *
+ * lib/ble에서 파싱된 이벤트 처리
+ */
+static void ble_evt_handler(ble_t *ble, const ble_event_t *event)
 {
-  const board_config_t *config = board_get_config();
-
-  LOG_INFO("BLE 초기화 시작 - 보드: %d", config->board);
-
-  if (!config->use_ble)
-  {
-    LOG_INFO("BLE 사용 안함");
-    return;
-  }
-
-  ble_instance.enabled = true;
-  ble_instance.current_mode = BLE_MODE_BYPASS;     // 초기 모드는 Bypass
-  ble_instance.conn_state = BLE_CONN_DISCONNECTED; // 초기 연결 상태
-  ble_instance.bypass_rx_callback = NULL;          // 콜백 초기화
-  ble_instance.async_at_cmd.is_active = false;
-
-  if (ble_port_init_instance(&ble_instance.ble) != 0)
-  {
-    LOG_ERR("BLE 포트 초기화 실패");
-    ble_instance.enabled = false;
-    return;
-  }
-
-  ble_instance.rx_queue = xQueueCreate(10, sizeof(uint8_t));
-  if (ble_instance.rx_queue == NULL)
-  {
-    LOG_ERR("BLE RX 큐 생성 실패");
-    ble_instance.enabled = false;
-    return;
-  }
-
-  ble_port_set_queue(ble_instance.rx_queue);
-
-  ble_instance.tx_queue = xQueueCreate(5, sizeof(ble_tx_request_t));
-  if (ble_instance.tx_queue == NULL)
-  {
-    LOG_ERR("BLE TX 큐 생성 실패");
-    ble_instance.enabled = false;
-    return;
-  }
-
-  ble_instance.mutex = xSemaphoreCreateMutex();
-  if (ble_instance.mutex == NULL)
-  {
-    LOG_ERR("BLE mutex 생성 실패");
-    ble_instance.enabled = false;
-    return;
-  }
-
-  ble_port_start(&ble_instance.ble);
-
-  BaseType_t ret = xTaskCreate(ble_rx_task, "ble_rx", 512,
-                               (void *)&ble_instance,
-                               tskIDLE_PRIORITY + 1, &ble_instance.rx_task);
-
-  if (ret != pdPASS)
-  {
-    LOG_ERR("BLE RX 태스크 생성 실패");
-    ble_instance.enabled = false;
-    return;
-  }
-
-  ret = xTaskCreate(ble_tx_task, "ble_tx", 512,
-                    (void *)&ble_instance,
-                    tskIDLE_PRIORITY + 1, &ble_instance.tx_task);
-
-  if (ret != pdPASS)
-  {
-    LOG_ERR("BLE TX 태스크 생성 실패");
-    ble_instance.enabled = false;
-    return;
-  }
-
-  LOG_INFO("BLE 초기화 완료");
-}
-
-ble_t *ble_get_handle(void)
-{
-  if (!ble_instance.enabled)
-  {
-    return NULL;
-  }
-
-  return &ble_instance.ble;
-}
-
-ble_instance_t *ble_get_instance(void)
-{
-  return &ble_instance;
-}
-
-bool ble_send(const char *data, size_t len, bool is_at)
-{
-  if (!ble_instance.enabled)
-  {
-    LOG_ERR("BLE not enabled");
-    return false;
-  }
-
-  if (!data || len == 0 || len > 512)
-  {
-    LOG_ERR("BLE invalid send parameters");
-    return false;
-  }
-
-  // AT 커맨드 전송 중에는 일반 전송 차단 (is_at=false 요청)
-  //  xSemaphoreTake(ble_instance.mutex, portMAX_DELAY);
-  bool is_at_mode = (ble_instance.current_mode == BLE_MODE_AT);
-  bool has_async_request = (ble_instance.async_request != NULL);
-  //  xSemaphoreGive(ble_instance.mutex);
-
-  if (is_at_mode && !is_at && has_async_request)
-  {
-    LOG_WARN("BLE in AT command mode - blocking normal transmission");
-    return false;
-  }
-
-  ble_tx_request_t tx_req;
-  memcpy(tx_req.data, data, len);
-  tx_req.len = len;
-  tx_req.is_at = is_at;
-
-  if (xQueueSend(ble_instance.tx_queue, &tx_req, pdMS_TO_TICKS(1000)) != pdTRUE)
-  {
-    LOG_ERR("BLE TX queue full");
-    return false;
-  }
-
-  return true;
-}
-
-ble_at_status_t ble_send_at_command_async(const char *at_cmd, const char *expected_response,
-                                          char *response_buf, size_t response_buf_size,
-                                          uint32_t timeout_ms)
-{
-  if (!ble_instance.enabled)
-  {
-    LOG_ERR("BLE not enabled");
-    return BLE_AT_STATUS_ERROR;
-  }
-
-  if (!at_cmd || !expected_response)
-  {
-    LOG_ERR("Invalid parameters");
-    return BLE_AT_STATUS_ERROR;
-  }
-
-  // 이미 진행 중인 비동기 요청이 있는지 확인
-  xSemaphoreTake(ble_instance.mutex, portMAX_DELAY);
-  if (ble_instance.async_request != NULL)
-  {
-    xSemaphoreGive(ble_instance.mutex);
-    LOG_ERR("Another async AT command is pending");
-    return BLE_AT_STATUS_ERROR;
-  }
-
-  // 비동기 요청 구조체 생성 및 초기화
-  ble_async_at_request_t request = {0};
-  strncpy(request.expected_response, expected_response, sizeof(request.expected_response) - 1);
-  request.response_len = 0;
-  request.status = BLE_AT_STATUS_PENDING;
-  request.timeout_ticks = pdMS_TO_TICKS(timeout_ms);
-  request.wait_sem = xSemaphoreCreateBinary();
-
-  if (request.wait_sem == NULL)
-  {
-    xSemaphoreGive(ble_instance.mutex);
-    LOG_ERR("Failed to create semaphore");
-    return BLE_AT_STATUS_ERROR;
-  }
-
-  // 전역 async_request 포인터 설정
-  ble_instance.async_request = &request;
-  xSemaphoreGive(ble_instance.mutex);
-
-  // AT 모드로 전환
-  LOG_INFO("Switching to AT command mode");
-  if (ble_instance.ble.ops && ble_instance.ble.ops->at_mode)
-  {
-    ble_instance.ble.ops->at_mode();
-  }
-
-  xSemaphoreTake(ble_instance.mutex, portMAX_DELAY);
-  ble_instance.current_mode = BLE_MODE_AT; // 모드 상태 업데이트
-  xSemaphoreGive(ble_instance.mutex);
-
-  // 모드 전환 대기 (BLE 모듈이 안정화될 시간)
-  vTaskDelay(pdMS_TO_TICKS(100));
-
-  // DMA 버퍼의 현재 위치를 업데이트하여 이전 데이터 무시
-  // (Bypass 모드에서 받은 데이터가 남아있을 수 있음)
-  xSemaphoreTake(ble_instance.mutex, portMAX_DELAY);
-  // RX task의 old_pos를 현재 DMA 위치로 동기화하는 것이 이상적이지만,
-  // 간단하게 잠시 대기하여 RX task가 버퍼를 처리하도록 함
-  xSemaphoreGive(ble_instance.mutex);
-  vTaskDelay(pdMS_TO_TICKS(10)); // RX task가 기존 데이터 처리하도록 여유 시간
-
-  // AT 커맨드 전송
-  LOG_INFO("Sending AT command: %s", at_cmd);
-  if (!ble_send(at_cmd, strlen(at_cmd), true))
-  {
-    xSemaphoreTake(ble_instance.mutex, portMAX_DELAY);
-    ble_instance.async_request = NULL;
-    xSemaphoreGive(ble_instance.mutex);
-    vSemaphoreDelete(request.wait_sem);
-    LOG_ERR("Failed to send AT command");
-    return BLE_AT_STATUS_ERROR;
-  }
-
-  // TX task가 실제로 UART로 전송할 시간 확보
-  // ble_send()는 큐에만 추가하므로, TX task 실행까지 대기 필요
-  vTaskDelay(pdMS_TO_TICKS(10));
-
-  // 응답 대기 (타임아웃 포함)
-  LOG_INFO("Waiting for response: %s (timeout: %lu ms)", expected_response, timeout_ms);
-  BaseType_t result = xSemaphoreTake(request.wait_sem, request.timeout_ticks);
-
-  // 세마포어 해제 및 정리
-  vSemaphoreDelete(request.wait_sem);
-
-  xSemaphoreTake(ble_instance.mutex, portMAX_DELAY);
-  ble_at_status_t status = request.status;
-
-  // 응답 버퍼 복사 (사용자가 제공한 경우)
-  if (response_buf && response_buf_size > 0 && request.response_len > 0)
-  {
-    size_t copy_len = (request.response_len < response_buf_size - 1) ? request.response_len : (response_buf_size - 1);
-    memcpy(response_buf, request.response_buf, copy_len);
-    response_buf[copy_len] = '\0';
-  }
-
-  ble_instance.async_request = NULL;
-  xSemaphoreGive(ble_instance.mutex);
-
-  // Bypass 모드로 전환 (응답 수신 후)
-  LOG_INFO("Switching to bypass mode");
-  if (ble_instance.ble.ops && ble_instance.ble.ops->bypass_mode)
-  {
-    ble_instance.ble.ops->bypass_mode();
-  }
-
-  xSemaphoreTake(ble_instance.mutex, portMAX_DELAY);
-  ble_instance.current_mode = BLE_MODE_BYPASS; // 모드 상태 업데이트
-  xSemaphoreGive(ble_instance.mutex);
-
-  if (result == pdFALSE)
-  {
-    LOG_ERR("AT command timeout");
-    return BLE_AT_STATUS_TIMEOUT;
-  }
-
-  LOG_INFO("AT command completed with status: %d", status);
-  return status;
-}
-
-// BLE 디바이스 이름 설정 (AT+MANUF=<name>)
-bool ble_set_device_name_async(const char *device_name, uint32_t timeout_ms)
-{
-  if (!device_name)
-  {
-    LOG_ERR("Device name is NULL");
-    return false;
-  }
-
-  // AT+MANUF=<name>\r\n 커맨드 생성
-  char at_cmd[64];
-  snprintf(at_cmd, sizeof(at_cmd), "AT+MANUF=%s\r", device_name);
-
-  // 응답 버퍼
-  char response[BLE_AT_RESPONSE_MAX_SIZE];
-
-  // 비동기 AT 커맨드 전송 (+OK 응답 기대)
-  ble_at_status_t status = ble_send_at_command_async(at_cmd, "+OK", response, sizeof(response), timeout_ms);
-
-  if (status == BLE_AT_STATUS_COMPLETED)
-  {
-    LOG_INFO("Device name set successfully: %s", device_name);
-    return true;
-  }
-  else if (status == BLE_AT_STATUS_TIMEOUT)
-  {
-    LOG_ERR("Device name setting timeout");
-    return false;
-  }
-  else if (status == BLE_AT_STATUS_ERROR)
-  {
-    LOG_ERR("Device name setting error: %s", response);
-    return false;
-  }
-
-  LOG_ERR("Device name setting failed with status: %d", status);
-  return false;
-}
-
-bool ble_set_advon_async(uint32_t timeout_ms)
-{
-  // AT+MANUF=<name>\r\n 커맨드 생성
-  char at_cmd[16];
-  snprintf(at_cmd, sizeof(at_cmd), "AT+ADVON\r");
-
-  // 응답 버퍼
-  char response[BLE_AT_RESPONSE_MAX_SIZE];
-
-  // 비동기 AT 커맨드 전송 (+OK 응답 기대)
-  ble_at_status_t status = ble_send_at_command_async(at_cmd, "+OK", response, sizeof(response), timeout_ms);
-
-  if (status == BLE_AT_STATUS_COMPLETED)
-  {
-    LOG_INFO("advon successfully");
-    return true;
-  }
-  else if (status == BLE_AT_STATUS_TIMEOUT)
-  {
-    LOG_ERR("timeout");
-    return false;
-  }
-  else if (status == BLE_AT_STATUS_ERROR)
-  {
-    LOG_ERR("setting error: %s", response);
-    return false;
-  }
-
-  LOG_ERR("setting failed with status: %d", status);
-  return false;
-}
-
-// BLE UART 통신 속도 설정 (AT+UART=<baudrate>)
-bool ble_set_uart_baudrate_async(uint32_t baudrate, uint32_t timeout_ms)
-{
-  // AT+UART=<baudrate>\r\n 커맨드 생성
-  char at_cmd[64];
-  snprintf(at_cmd, sizeof(at_cmd), "AT+UART=%lu\r\n", baudrate);
-
-  // 응답 버퍼
-  char response[BLE_AT_RESPONSE_MAX_SIZE];
-
-  // 비동기 AT 커맨드 전송 (+OK 응답 기대)
-  ble_at_status_t status = ble_send_at_command_async(at_cmd, "+OK", response, sizeof(response), timeout_ms);
-
-  if (status == BLE_AT_STATUS_COMPLETED)
-  {
-    LOG_INFO("UART baudrate set successfully: %lu", baudrate);
-    return true;
-  }
-  else if (status == BLE_AT_STATUS_TIMEOUT)
-  {
-    LOG_ERR("UART baudrate setting timeout");
-    return false;
-  }
-  else if (status == BLE_AT_STATUS_ERROR)
-  {
-    LOG_ERR("UART baudrate setting error: %s", response);
-    return false;
-  }
-
-  LOG_ERR("UART baudrate setting failed with status: %d", status);
-  return false;
-}
-
-// BLE 연결 상태 조회
-ble_connection_state_t ble_get_connection_state(void)
-{
-  if (!ble_instance.enabled)
-  {
-    return BLE_CONN_DISCONNECTED;
-  }
-
-  //  xSemaphoreTake(ble_instance.mutex, portMAX_DELAY);
-  ble_connection_state_t state = ble_instance.conn_state;
-  // xSemaphoreGive(ble_instance.mutex);
-
-  return state;
-}
-
-// BLE 연결 상태 변경 (GPIO 인터럽트에서 호출)
-void ble_set_connection_state(ble_connection_state_t state)
-{
-  if (!ble_instance.enabled)
-  {
-    return;
-  }
-
-  //  xSemaphoreTake(ble_instance.mutex, portMAX_DELAY);
-  ble_instance.conn_state = state;
-  //  xSemaphoreGive(ble_instance.mutex);
-
-  if (state == BLE_CONN_CONNECTED)
-  {
-    LOG_INFO("BLE Connected");
-  }
-  else
-  {
-    LOG_INFO("BLE Disconnected");
-  }
-}
-
-// 현재 모드 조회
-ble_mode_t ble_get_current_mode(void)
-{
-  if (!ble_instance.enabled)
-  {
-    return BLE_MODE_BYPASS;
-  }
-
-  xSemaphoreTake(ble_instance.mutex, portMAX_DELAY);
-  ble_mode_t mode = ble_instance.current_mode;
-  xSemaphoreGive(ble_instance.mutex);
-
-  return mode;
-}
-
-// Bypass 모드 RX 콜백 등록
-void ble_set_bypass_rx_callback(ble_bypass_rx_callback_t callback)
-{
-  if (!ble_instance.enabled)
-  {
-    return;
-  }
-
-  xSemaphoreTake(ble_instance.mutex, portMAX_DELAY);
-  ble_instance.bypass_rx_callback = callback;
-  xSemaphoreGive(ble_instance.mutex);
-
-  LOG_INFO("BLE Bypass RX callback %s", callback ? "registered" : "unregistered");
-}
-
-static void ble_check_async_at_timeout(void)
-{
-
-  if (!ble_instance.async_at_cmd.is_active)
-  {
-
-    return;
-  }
-
-  TickType_t current_tick = xTaskGetTickCount();
-
-  TickType_t elapsed_ticks = current_tick - ble_instance.async_at_cmd.start_tick;
-
-  if (elapsed_ticks >= ble_instance.async_at_cmd.timeout_ticks)
-  {
-
-    LOG_ERR("Async AT command timeout: %s", ble_instance.async_at_cmd.command);
-
-    // 콜백 호출 (타임아웃 = 실패)
-
-    if (ble_instance.async_at_cmd.callback)
-    {
-
-      ble_instance.async_at_cmd.callback(false, ble_instance.async_at_cmd.user_data);
+    if (!ble || !event) {
+        return;
     }
 
-    // Bypass 모드로 복귀
+    switch (event->type) {
+        case BLE_EVENT_AT_OK:
+            LOG_DEBUG("AT OK: %s", event->data.at_response.response);
+            break;
 
-    if (ble_instance.ble.ops && ble_instance.ble.ops->bypass_mode)
-    {
+        case BLE_EVENT_AT_ERROR:
+            LOG_WARN("AT ERROR: %s", event->data.at_response.response);
+            break;
 
-      ble_instance.ble.ops->bypass_mode();
+        case BLE_EVENT_AT_READY:
+            LOG_INFO("BLE 모듈 준비 완료");
+            break;
+
+        case BLE_EVENT_CONNECTED:
+            LOG_INFO("BLE 연결됨 (이벤트)");
+            break;
+
+        case BLE_EVENT_DISCONNECTED:
+            LOG_INFO("BLE 연결 해제됨 (이벤트)");
+            break;
+
+        case BLE_EVENT_ADVERTISING:
+            LOG_DEBUG("BLE Advertising 시작됨");
+            break;
+
+        case BLE_EVENT_APP_CMD:
+            /* 앱 명령어 처리 (ble_cmd.c) */
+            LOG_INFO("앱 명령어 수신: %s", event->data.app_cmd.cmd);
+            ble_app_cmd_handler(&ble_instance, event->data.app_cmd.cmd);
+            break;
+
+        default:
+            break;
     }
-
-    ble_instance.current_mode = BLE_MODE_BYPASS;
-
-    // 비활성화
-
-    ble_instance.async_at_cmd.is_active = false;
-  }
-}
-
-// 비동기 AT 명령어 전송 (콜백 기반, 즉시 반환)
-
-bool ble_send_at_cmd_truly_async(const char *at_cmd, ble_at_command_callback_t callback,
-
-                                 void *user_data, uint32_t timeout_ms)
-{
-
-  if (!ble_instance.enabled)
-  {
-
-    LOG_ERR("BLE not enabled");
-
-    return false;
-  }
-
-  if (!at_cmd || !callback)
-  {
-
-    LOG_ERR("Invalid parameters");
-
-    return false;
-  }
-
-  xSemaphoreTake(ble_instance.mutex, portMAX_DELAY);
-
-  // 이미 진행 중인 비동기 명령어가 있는지 확인
-
-  if (ble_instance.async_at_cmd.is_active)
-  {
-
-    xSemaphoreGive(ble_instance.mutex);
-
-    LOG_ERR("Another async AT command is active");
-
-    return false;
-  }
-
-  // 비동기 요청 설정
-
-  strncpy(ble_instance.async_at_cmd.command, at_cmd, sizeof(ble_instance.async_at_cmd.command) - 1);
-
-  ble_instance.async_at_cmd.callback = callback;
-
-  ble_instance.async_at_cmd.user_data = user_data;
-
-  ble_instance.async_at_cmd.start_tick = xTaskGetTickCount();
-
-  ble_instance.async_at_cmd.timeout_ticks = pdMS_TO_TICKS(timeout_ms);
-
-  ble_instance.async_at_cmd.is_active = true;
-
-  xSemaphoreGive(ble_instance.mutex);
-
-  // AT 모드로 전환
-
-  LOG_INFO("Switching to AT mode for async command");
-
-  if (ble_instance.ble.ops && ble_instance.ble.ops->at_mode)
-  {
-
-    ble_instance.ble.ops->at_mode();
-  }
-
-  xSemaphoreTake(ble_instance.mutex, portMAX_DELAY);
-
-  ble_instance.current_mode = BLE_MODE_AT;
-
-  xSemaphoreGive(ble_instance.mutex);
-
-  // 모드 전환 대기
-
-  vTaskDelay(pdMS_TO_TICKS(100));
-
-  // AT 커맨드 전송
-
-  LOG_INFO("Sending async AT command: %s", at_cmd);
-
-  if (!ble_send(at_cmd, strlen(at_cmd), true))
-  {
-
-    xSemaphoreTake(ble_instance.mutex, portMAX_DELAY);
-
-    ble_instance.async_at_cmd.is_active = false;
-
-    xSemaphoreGive(ble_instance.mutex);
-
-    // Bypass 모드로 복귀
-
-    if (ble_instance.ble.ops && ble_instance.ble.ops->bypass_mode)
-    {
-
-      ble_instance.ble.ops->bypass_mode();
-    }
-
-    ble_instance.current_mode = BLE_MODE_BYPASS;
-
-    LOG_ERR("Failed to send async AT command");
-
-    return false;
-  }
-
-  LOG_INFO("Async AT command sent successfully, waiting for response");
-
-  return true;
-}
-
-// AT+MANUF=디바이스명 비동기 전송
-
-bool ble_set_manuf_async(const char *device_name, ble_at_command_callback_t callback,
-
-                         void *user_data, uint32_t timeout_ms)
-{
-
-  if (!device_name)
-  {
-
-    LOG_ERR("Device name is NULL");
-
-    return false;
-  }
-
-  // AT+MANUF=<name>\r 커맨드 생성
-
-  char at_cmd[128];
-
-  snprintf(at_cmd, sizeof(at_cmd), "AT+MANUF=%s\r", device_name);
-
-  return ble_send_at_cmd_truly_async(at_cmd, callback, user_data, timeout_ms);
-}
-
-// AT+DISCONNECT 비동기 전송
-
-bool ble_disconnect_async(ble_at_command_callback_t callback, void *user_data, uint32_t timeout_ms)
-{
-
-  const char *at_cmd = "AT+DISCONNECT\r";
-
-  return ble_send_at_cmd_truly_async(at_cmd, callback, user_data, timeout_ms);
 }
