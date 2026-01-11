@@ -341,13 +341,17 @@ parse_result_t rtcm_try_parse(gps_t *gps, ringbuffer_t *rb) {
     gps->parser_ctx.stats.rtcm_packets++;
     gps->parser_ctx.stats.last_rtcm_tick = xTaskGetTickCount();
 
-    /* 10. 이벤트 핸들러 호출 (URC) */
+    /* 10. RTCM 수신 이벤트 핸들러 호출 */
     if (gps->handler) {
-        gps_msg_t msg = {
+        gps_event_t event = {
+            .type = GPS_EVENT_RTCM_RECEIVED,
+            .protocol = GPS_PROTOCOL_RTCM,
             .timestamp_ms = xTaskGetTickCount(),
-            .rtcm.msg_type = msg_type
+            .data.rtcm.msg_type = msg_type,
+            .data.rtcm.length = total_len,
+            .source.rtcm_msg_type = msg_type
         };
-        gps->handler(gps, GPS_EVENT_DATA_PARSED, GPS_PROTOCOL_RTCM, msg);
+        gps->handler(gps, &event);
     }
 
     return PARSE_OK;

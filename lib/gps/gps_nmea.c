@@ -172,13 +172,39 @@ parse_result_t nmea_try_parse(gps_t *gps, ringbuffer_t *rb) {
     gps->parser_ctx.stats.nmea_packets++;
     gps->parser_ctx.stats.last_nmea_tick = xTaskGetTickCount();
 
-    /* URC이면 이벤트 핸들러 호출 */
+    /* URC이면 고수준 이벤트 핸들러 호출 */
     if (nmea_msg_table[msg_idx].is_urc && gps->handler) {
-        gps_msg_t msg = {
+        gps_event_t event = {
+            .protocol = GPS_PROTOCOL_NMEA,
             .timestamp_ms = xTaskGetTickCount(),
-            .nmea = msg_id
+            .source.nmea_msg_id = msg_id
         };
-        gps->handler(gps, GPS_EVENT_DATA_PARSED, GPS_PROTOCOL_NMEA, msg);
+
+        /* 메시지 타입별로 적절한 이벤트 생성 */
+        if (msg_id == GPS_NMEA_MSG_GGA) {
+            /* 위치 업데이트 이벤트 */
+            event.type = GPS_EVENT_POSITION_UPDATED;
+            event.data.position.latitude = gps->nmea_data.gga.lat;
+            event.data.position.longitude = gps->nmea_data.gga.lon;
+            event.data.position.altitude = gps->nmea_data.gga.alt;
+            event.data.position.fix_type = gps->nmea_data.gga.fix;
+            event.data.position.sat_count = gps->nmea_data.gga.sat_num;
+            event.data.position.hdop = gps->nmea_data.gga.hdop;
+            gps->handler(gps, &event);
+        } else if (msg_id == GPS_NMEA_MSG_THS) {
+            /* 헤딩 업데이트 이벤트 */
+            event.type = GPS_EVENT_HEADING_UPDATED;
+            event.data.heading.heading = gps->nmea_data.ths.heading;
+            event.data.heading.pitch = 0.0;  /* THS에는 pitch 없음 */
+            event.data.heading.heading_std = 0.0f;
+            event.data.heading.status = gps->nmea_data.ths.mode;
+            gps->handler(gps, &event);
+        } else if (msg_id == GPS_NMEA_MSG_RMC) {
+            /* 속도 업데이트 이벤트 (RMC 구현 시) */
+            event.type = GPS_EVENT_VELOCITY_UPDATED;
+            /* TODO: RMC 파싱 후 속도 데이터 추가 */
+            gps->handler(gps, &event);
+        }
     }
 
 #if defined(USE_STORE_RAW_GGA)

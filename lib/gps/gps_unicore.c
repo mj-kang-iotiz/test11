@@ -11,12 +11,17 @@
 #include "dev_assert.h"
 #include <string.h>
 #include <stdlib.h>
+#include <math.h>
 
 #ifndef TAG
 #define TAG "GPS_UNICORE"
 #endif
 
 #include "log.h"
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
 
 /*===========================================================================
  * CRC32 테이블 (Unicore Binary용)
@@ -205,13 +210,15 @@ parse_result_t unicore_ascii_try_parse(gps_t *gps, ringbuffer_t *rb) {
         }
     }
 
-    /* 9. 이벤트 핸들러 호출 */
+    /* 9. 명령어 응답 이벤트 핸들러 호출 */
     if (gps->handler) {
-        gps_msg_t msg = {
+        gps_event_t event = {
+            .type = GPS_EVENT_CMD_RESPONSE,
+            .protocol = GPS_PROTOCOL_UNICORE_CMD,
             .timestamp_ms = xTaskGetTickCount(),
-            .unicore.response = resp
+            .data.cmd_response.success = (resp == GPS_UNICORE_RESP_OK)
         };
-        gps->handler(gps, GPS_EVENT_CMD_RESPONSE, GPS_PROTOCOL_UNICORE_CMD, msg);
+        gps->handler(gps, &event);
     }
 
     return PARSE_OK;
@@ -305,13 +312,34 @@ parse_result_t unicore_bin_try_parse(gps_t *gps, ringbuffer_t *rb) {
     LOG_DEBUG("Unicore Binary: %s (ID=%d, len=%d)",
               unicore_bin_msg_to_str(msg_id), msg_id, total_len);
 
-    /* 11. 이벤트 핸들러 호출 (URC) */
+    /* 11. 고수준 이벤트 핸들러 호출 (URC) */
     if (gps->handler) {
-        gps_msg_t msg = {
+        gps_event_t event = {
+            .protocol = GPS_PROTOCOL_UNICORE_BIN,
             .timestamp_ms = xTaskGetTickCount(),
-            .unicore_bin.msg = msg_id
+            .source.unicore_bin_msg_id = msg_id
         };
-        gps->handler(gps, GPS_EVENT_DATA_PARSED, GPS_PROTOCOL_UNICORE_BIN, msg);
+
+        /* 메시지 타입별로 적절한 이벤트 생성 */
+        if (msg_id == GPS_UNICORE_BIN_MSG_BESTNAV) {
+            /* 위치 + 속도 업데이트 이벤트 */
+            event.type = GPS_EVENT_POSITION_UPDATED;
+            event.data.position.latitude = gps->unicore_bin_data.position.latitude;
+            event.data.position.longitude = gps->unicore_bin_data.position.longitude;
+            event.data.position.altitude = gps->unicore_bin_data.position.altitude;
+            event.data.position.fix_type = gps->unicore_bin_data.position.pos_type;
+            event.data.position.sat_count = 0;  /* BESTNAV에는 위성 수 없음 */
+            event.data.position.hdop = 0.0;
+            gps->handler(gps, &event);
+
+            /* 속도 이벤트도 발생 */
+            event.type = GPS_EVENT_VELOCITY_UPDATED;
+            event.data.velocity.speed = gps->unicore_bin_data.velocity.hor_speed;
+            event.data.velocity.track = gps->unicore_bin_data.velocity.trk_gnd;
+            event.data.velocity.mode = 0;
+            gps->handler(gps, &event);
+        }
+        /* TODO: HEADING2, BESTPOS, BESTVEL 등 다른 메시지 처리 */
     }
 
     return PARSE_OK;
@@ -366,7 +394,28 @@ static void unicore_bin_parse_bestnav(gps_t *gps, const uint8_t *payload, size_t
     if (len < sizeof(hpd_unicore_bestnavb_t)) {
         return;
     }
-    memcpy(&gps->unicore_bin_data.bestnav, payload, sizeof(hpd_unicore_bestnavb_t));
+
+    /* 임시로 구조체에 복사 */
+    hpd_unicore_bestnavb_t nav;
+    memcpy(&nav, payload, sizeof(hpd_unicore_bestnavb_t));
+
+    /* 공용 위치 필드 업데이트 */
+    gps->unicore_bin_data.position.valid = true;
+    gps->unicore_bin_data.position.latitude = nav.latitude * (180.0 / M_PI);  /* rad -> deg */
+    gps->unicore_bin_data.position.longitude = nav.longitude * (180.0 / M_PI);
+    gps->unicore_bin_data.position.altitude = nav.altitude;
+    gps->unicore_bin_data.position.pos_type = nav.pos_type;
+    gps->unicore_bin_data.position.lat_std = nav.lat_std;
+    gps->unicore_bin_data.position.lon_std = nav.lon_std;
+    gps->unicore_bin_data.position.alt_std = nav.alt_std;
+    gps->unicore_bin_data.position.source_msg = 2118;  /* BESTNAV */
+
+    /* 공용 속도 필드 업데이트 */
+    gps->unicore_bin_data.velocity.valid = true;
+    gps->unicore_bin_data.velocity.hor_speed = nav.hor_spd;
+    gps->unicore_bin_data.velocity.trk_gnd = nav.trk_gnd;
+    gps->unicore_bin_data.velocity.ver_speed = nav.ver_spd;
+    gps->unicore_bin_data.velocity.source_msg = 2118;  /* BESTNAV */
 }
 
 /*===========================================================================

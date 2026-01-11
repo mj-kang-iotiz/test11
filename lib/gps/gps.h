@@ -25,8 +25,7 @@
 /*===========================================================================
  * 이벤트 핸들러 타입
  *===========================================================================*/
-typedef void (*gps_evt_handler)(gps_t *gps, gps_event_t event,
-                                gps_protocol_t protocol, gps_msg_t msg);
+typedef void (*gps_evt_handler)(gps_t *gps, const gps_event_t *event);
 
 /*===========================================================================
  * RTCM 데이터 저장 구조체 (LoRa 전송용)
@@ -40,10 +39,47 @@ typedef struct {
 
 /*===========================================================================
  * Unicore Binary 데이터 저장 구조체
+ * 여러 메시지가 공용 필드를 업데이트 (BESTNAV, HEADING2, BESTPOS, BESTVEL 등)
  *===========================================================================*/
 typedef struct {
-    gps_unicore_bin_header_t header;
-    hpd_unicore_bestnavb_t bestnav;
+    /* === 공용 헤더 정보 === */
+    uint16_t last_msg_id;           /**< 마지막 수신 메시지 ID */
+    uint32_t gps_week;              /**< GPS 주 */
+    uint32_t gps_ms;                /**< GPS 밀리초 */
+    uint32_t timestamp_ms;          /**< 수신 시각 (xTaskGetTickCount) */
+
+    /* === 공용 위치 데이터 (BESTNAV, BESTPOS가 업데이트) === */
+    struct {
+        bool valid;                 /**< 유효한 데이터 있음 */
+        double latitude;            /**< 위도 (degree) */
+        double longitude;           /**< 경도 (degree) */
+        double altitude;            /**< 고도 (meter) */
+        uint8_t pos_type;           /**< 위치 타입 (0=NONE, 16=RTK_FIXED, 17=RTK_FLOAT) */
+        float lat_std;              /**< 위도 표준편차 (meter) */
+        float lon_std;              /**< 경도 표준편차 (meter) */
+        float alt_std;              /**< 고도 표준편차 (meter) */
+        uint16_t source_msg;        /**< 출처 메시지 ID (2118=BESTNAV, 42=BESTPOS) */
+    } position;
+
+    /* === 공용 헤딩 데이터 (HEADING2가 업데이트) === */
+    struct {
+        bool valid;                 /**< 유효한 데이터 있음 */
+        double heading;             /**< 헤딩 (degree, 0-360) */
+        double pitch;               /**< 피치 (degree) */
+        float heading_std;          /**< 헤딩 표준편차 (degree) */
+        float pitch_std;            /**< 피치 표준편차 (degree) */
+        uint16_t source_msg;        /**< 출처 메시지 ID (2120=HEADING2) */
+    } heading;
+
+    /* === 공용 속도 데이터 (BESTNAV, BESTVEL이 업데이트) === */
+    struct {
+        bool valid;                 /**< 유효한 데이터 있음 */
+        double hor_speed;           /**< 수평 속도 (m/s) */
+        double trk_gnd;             /**< 진행 방향 (degree, 0-360) */
+        double ver_speed;           /**< 수직 속도 (m/s) */
+        uint16_t source_msg;        /**< 출처 메시지 ID (2118=BESTNAV, 99=BESTVEL) */
+    } velocity;
+
 } gps_unicore_bin_data_t;
 
 /*===========================================================================
