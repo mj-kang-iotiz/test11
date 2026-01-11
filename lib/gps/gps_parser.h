@@ -33,10 +33,10 @@ typedef enum {
  *===========================================================================*/
 typedef enum {
     GPS_PROTOCOL_NONE = 0,
-    GPS_PROTOCOL_NMEA,
-    GPS_PROTOCOL_UNICORE_ASCII,   /**< $command,response:OK*XX */
-    GPS_PROTOCOL_UNICORE_BIN,     /**< 0xAA 0x44 0xB5 ... */
-    GPS_PROTOCOL_RTCM,            /**< 0xD3 ... */
+    GPS_PROTOCOL_NMEA,            /**< $GPGGA, $GNGGA 등 NMEA-0183 */
+    GPS_PROTOCOL_UNICORE_CMD,     /**< $command,response:OK*XX (설정 명령어) */
+    GPS_PROTOCOL_UNICORE_BIN,     /**< 0xAA 0x44 0xB5 ... (Binary 메시지) */
+    GPS_PROTOCOL_RTCM,            /**< 0xD3 ... (RTCM3) */
 } gps_protocol_t;
 
 /*===========================================================================
@@ -62,12 +62,17 @@ typedef struct {
 typedef struct {
     uint32_t rx_packets;          /**< 수신 패킷 수 */
     uint32_t nmea_packets;        /**< NMEA 패킷 수 */
-    uint32_t unicore_ascii_packets;
-    uint32_t unicore_bin_packets;
-    uint32_t rtcm_packets;
+    uint32_t unicore_cmd_packets; /**< Unicore 명령어 응답 수 */
+    uint32_t unicore_bin_packets; /**< Unicore Binary 패킷 수 */
+    uint32_t rtcm_packets;        /**< RTCM 패킷 수 */
     uint32_t crc_errors;          /**< CRC 오류 수 */
     uint32_t invalid_packets;     /**< 잘못된 패킷 수 */
     uint32_t unknown_packets;     /**< 알 수 없는 패킷 (skip) */
+
+    /* 수신 시간 추적 */
+    uint32_t last_rx_tick;        /**< 마지막 수신 tick (xTaskGetTickCount) */
+    uint32_t last_nmea_tick;      /**< 마지막 NMEA 수신 tick */
+    uint32_t last_rtcm_tick;      /**< 마지막 RTCM 수신 tick */
 } gps_parser_stats_t;
 
 /*===========================================================================

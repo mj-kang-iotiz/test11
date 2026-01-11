@@ -8,6 +8,7 @@
 #include "gps_parser.h"
 #include "gps_proto_def.h"
 #include "gps_parse.h"
+#include "dev_assert.h"
 #include <string.h>
 #include <stdlib.h>
 
@@ -83,6 +84,49 @@ static bool unicore_ascii_verify_crc(const char *buf, size_t len, size_t *star_p
 static void unicore_bin_parse_bestnav(gps_t *gps, const uint8_t *payload, size_t len);
 
 /*===========================================================================
+ * X-Macro 기반 Unicore Binary 핸들러 테이블
+ *===========================================================================*/
+typedef void (*unicore_bin_handler_t)(gps_t *gps, const uint8_t *payload, size_t len);
+
+static const struct {
+    uint16_t msg_id;
+    unicore_bin_handler_t handler;
+    bool is_urc;
+} unicore_bin_msg_table[] = {
+#define X(name, msg_id, handler, is_urc) { msg_id, handler, is_urc },
+    UNICORE_BIN_MSG_TABLE(X)
+#undef X
+};
+
+#define UNICORE_BIN_MSG_TABLE_SIZE (sizeof(unicore_bin_msg_table) / sizeof(unicore_bin_msg_table[0]))
+
+/*===========================================================================
+ * X-Macro 기반 문자열 변환 함수
+ *===========================================================================*/
+
+/* Unicore Binary 메시지 ID → 문자열 */
+static const char* unicore_bin_msg_to_str(uint16_t msg_id) {
+    switch (msg_id) {
+#define X(name, id, handler, is_urc) case id: return #name;
+        UNICORE_BIN_MSG_TABLE(X)
+#undef X
+        default: return "UNKNOWN";
+    }
+}
+
+/* Unicore Response → 문자열 */
+static const char* unicore_resp_to_str(gps_unicore_resp_t resp) {
+    if (resp == GPS_UNICORE_RESP_NONE) return "NONE";
+
+    switch (resp) {
+#define X(name, str) case GPS_UNICORE_RESP_##name: return str;
+        UNICORE_RESP_TABLE(X)
+#undef X
+        default: return "UNKNOWN";
+    }
+}
+
+/*===========================================================================
  * Unicore ASCII 파서 ($command,response:OK*XX)
  *===========================================================================*/
 
@@ -151,7 +195,7 @@ parse_result_t unicore_ascii_try_parse(gps_t *gps, ringbuffer_t *rb) {
 
     /* 7. advance */
     ringbuffer_advance(rb, pkt_len);
-    gps->parser_ctx.stats.unicore_ascii_packets++;
+    gps->parser_ctx.stats.unicore_cmd_packets++;
 
     /* 8. 명령어 응답 대기 중이면 세마포어 시그널 */
     if (gps->parser_ctx.cmd_ctx.waiting) {
@@ -163,8 +207,11 @@ parse_result_t unicore_ascii_try_parse(gps_t *gps, ringbuffer_t *rb) {
 
     /* 9. 이벤트 핸들러 호출 */
     if (gps->handler) {
-        gps_msg_t msg = { .unicore.response = resp };
-        gps->handler(gps, GPS_EVENT_CMD_RESPONSE, GPS_PROTOCOL_UNICORE_ASCII, msg);
+        gps_msg_t msg = {
+            .timestamp_ms = xTaskGetTickCount(),
+            .unicore.response = resp
+        };
+        gps->handler(gps, GPS_EVENT_CMD_RESPONSE, GPS_PROTOCOL_UNICORE_CMD, msg);
     }
 
     return PARSE_OK;
@@ -236,16 +283,16 @@ parse_result_t unicore_bin_try_parse(gps_t *gps, ringbuffer_t *rb) {
         return PARSE_INVALID;
     }
 
-    /* 8. 메시지별 데이터 파싱 */
+    /* 8. 메시지별 데이터 파싱 (테이블 기반) */
     const uint8_t *payload = &packet[GPS_UNICORE_BIN_HEADER_SIZE];
 
-    switch (msg_id) {
-        case GPS_UNICORE_BIN_MSG_BESTNAV:
-            unicore_bin_parse_bestnav(gps, payload, msg_len);
+    for (size_t i = 0; i < UNICORE_BIN_MSG_TABLE_SIZE; i++) {
+        if (unicore_bin_msg_table[i].msg_id == msg_id) {
+            if (unicore_bin_msg_table[i].handler) {
+                unicore_bin_msg_table[i].handler(gps, payload, msg_len);
+            }
             break;
-        default:
-            /* 알 수 없는 메시지 - 그냥 advance */
-            break;
+        }
     }
 
     /* 9. 헤더 정보 저장 */
@@ -255,9 +302,15 @@ parse_result_t unicore_bin_try_parse(gps_t *gps, ringbuffer_t *rb) {
     ringbuffer_advance(rb, total_len);
     gps->parser_ctx.stats.unicore_bin_packets++;
 
+    LOG_DEBUG("Unicore Binary: %s (ID=%d, len=%d)",
+              unicore_bin_msg_to_str(msg_id), msg_id, total_len);
+
     /* 11. 이벤트 핸들러 호출 (URC) */
     if (gps->handler) {
-        gps_msg_t msg = { .unicore_bin.msg = msg_id };
+        gps_msg_t msg = {
+            .timestamp_ms = xTaskGetTickCount(),
+            .unicore_bin.msg = msg_id
+        };
         gps->handler(gps, GPS_EVENT_DATA_PARSED, GPS_PROTOCOL_UNICORE_BIN, msg);
     }
 

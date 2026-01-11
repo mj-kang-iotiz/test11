@@ -8,6 +8,7 @@
 #include "gps_parser.h"
 #include "gps_proto_def.h"
 #include "gps_parse.h"
+#include "dev_assert.h"
 #include <string.h>
 #include <stdlib.h>
 
@@ -33,17 +34,35 @@ static size_t nmea_count_fields(const char *buf, size_t len);
 typedef void (*nmea_handler_t)(gps_t *gps, const char *buf, size_t len);
 
 static const struct {
+    gps_nmea_msg_t msg_id;  /* enum 값 명시적으로 저장 */
     const char *str;
     nmea_handler_t handler;
     uint8_t field_count;
     bool is_urc;
 } nmea_msg_table[] = {
-#define X(name, str, handler, field_count, is_urc) { str, handler, field_count, is_urc },
+#define X(name, str, handler, field_count, is_urc) \
+    { GPS_NMEA_MSG_##name, str, handler, field_count, is_urc },
     NMEA_MSG_TABLE(X)
 #undef X
 };
 
 #define NMEA_MSG_TABLE_SIZE (sizeof(nmea_msg_table) / sizeof(nmea_msg_table[0]))
+
+/*===========================================================================
+ * X-Macro 기반 문자열 변환 함수
+ *===========================================================================*/
+static const char* nmea_msg_to_str(gps_nmea_msg_t msg_id) {
+    if (msg_id == GPS_NMEA_MSG_NONE) return "NONE";
+    if (msg_id == GPS_NMEA_MSG_INVALID) return "INVALID";
+
+    switch (msg_id) {
+#define X(name, str, handler, field_count, is_urc) \
+        case GPS_NMEA_MSG_##name: return str;
+        NMEA_MSG_TABLE(X)
+#undef X
+        default: return "UNKNOWN";
+    }
+}
 
 /*===========================================================================
  * NMEA 패킷 파싱 (Chain 방식)
@@ -80,8 +99,9 @@ parse_result_t nmea_try_parse(gps_t *gps, ringbuffer_t *rb) {
     int msg_idx = -1;
 
     for (size_t i = 0; i < NMEA_MSG_TABLE_SIZE; i++) {
+        DEV_ASSERT(nmea_msg_table[i].str != NULL);
         if (strncmp(msg_type, nmea_msg_table[i].str, 3) == 0) {
-            msg_id = (gps_nmea_msg_t)(i + 1);  /* enum은 1부터 시작 */
+            msg_id = nmea_msg_table[i].msg_id;  /* 테이블에서 직접 읽기 */
             msg_idx = i;
             break;
         }
@@ -91,13 +111,19 @@ parse_result_t nmea_try_parse(gps_t *gps, ringbuffer_t *rb) {
         return PARSE_NOT_MINE;  /* 알 수 없는 NMEA 메시지 */
     }
 
+    /* 테이블 인덱스와 enum 값이 일치하는지 검증 */
+    DEV_ASSERT(msg_idx >= 0 && msg_idx < (int)NMEA_MSG_TABLE_SIZE);
+    DEV_ASSERT(nmea_msg_table[msg_idx].msg_id == msg_id);
+
     /* 5. '\r' 찾기 (패킷 끝) */
     size_t cr_pos;
     if (!ringbuffer_find_char(rb, '\r', GPS_NMEA_MAX_LEN, &cr_pos)) {
         /* '\r' 없음 - 최대 길이 초과하면 INVALID */
         if (ringbuffer_size(rb) >= GPS_NMEA_MAX_LEN) {
+            LOG_WARN("NMEA packet too long without \\r, dropping");
             return PARSE_INVALID;
         }
+        /* 데이터 부족, 더 기다림 */
         return PARSE_NEED_MORE;
     }
 
@@ -118,10 +144,11 @@ parse_result_t nmea_try_parse(gps_t *gps, ringbuffer_t *rb) {
 
     /* 7. Field count 검증 */
     size_t field_count = nmea_count_fields(buf, cr_pos);
+    DEV_ASSERT(nmea_msg_table[msg_idx].field_count > 0);
     if (field_count < nmea_msg_table[msg_idx].field_count) {
         /* 필드 수 부족 - 잘못된 패킷 */
-        LOG_WARN("NMEA field count mismatch: %s got %zu, expected %d",
-                 nmea_msg_table[msg_idx].str, field_count,
+        LOG_WARN("NMEA %s field count mismatch: got %zu, expected %d",
+                 nmea_msg_to_str(msg_id), field_count,
                  nmea_msg_table[msg_idx].field_count);
         ringbuffer_advance(rb, pkt_len);
         return PARSE_INVALID;
@@ -143,10 +170,14 @@ parse_result_t nmea_try_parse(gps_t *gps, ringbuffer_t *rb) {
     /* 10. advance 및 이벤트 */
     ringbuffer_advance(rb, pkt_len);
     gps->parser_ctx.stats.nmea_packets++;
+    gps->parser_ctx.stats.last_nmea_tick = xTaskGetTickCount();
 
     /* URC이면 이벤트 핸들러 호출 */
     if (nmea_msg_table[msg_idx].is_urc && gps->handler) {
-        gps_msg_t msg = { .nmea = msg_id };
+        gps_msg_t msg = {
+            .timestamp_ms = xTaskGetTickCount(),
+            .nmea = msg_id
+        };
         gps->handler(gps, GPS_EVENT_DATA_PARSED, GPS_PROTOCOL_NMEA, msg);
     }
 

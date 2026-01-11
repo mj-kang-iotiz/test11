@@ -2,6 +2,7 @@
 #define GPS_UNICORE_H
 
 #include "gps_types.h"
+#include "gps_proto_def.h"
 #include <stdint.h>
 #include <stdbool.h>
 
@@ -16,11 +17,14 @@ typedef enum {
   GPS_UNICORE_MSG_COMMAND = 1
 } gps_unicore_msg_t;
 
+/**
+ * @brief Unicore 명령어 응답 타입 (X-Macro로 자동 생성)
+ */
 typedef enum {
   GPS_UNICORE_RESP_NONE = 0,
-  GPS_UNICORE_RESP_OK = 1,
-  GPS_UNICORE_RESP_ERROR = 2,
-  GPS_UNICORE_RESP_UNKNOWN = 3
+#define X(name, str) GPS_UNICORE_RESP_##name,
+  UNICORE_RESP_TABLE(X)
+#undef X
 } gps_unicore_resp_t;
 
 typedef struct {
@@ -35,9 +39,14 @@ typedef struct {
   gps_unicore_resp_t response;
 } gps_unicore_parser_t;
 
+/**
+ * @brief Unicore Binary 메시지 타입 (X-Macro로 자동 생성)
+ */
 typedef enum {
-    GPS_UNICORE_BIN_MSG_BESTNAV = 2118
-}gps_unicore_bin_msg_t;
+#define X(name, msg_id, handler, is_urc) GPS_UNICORE_BIN_MSG_##name = msg_id,
+    UNICORE_BIN_MSG_TABLE(X)
+#undef X
+} gps_unicore_bin_msg_t;
 
 typedef struct __attribute__((packed)) {
     uint8_t sync[3]; ///< 0xAA 0x44 0xB5
