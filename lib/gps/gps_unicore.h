@@ -100,9 +100,7 @@ typedef struct __attribute__((packed))
     float horspd_std;
 }hpd_unicore_bestnavb_t;
 
-typedef struct {
-  hpd_unicore_bestnavb_t bestnav;
-} gps_unicore_bin_data_t;
+/* gps_unicore_bin_data_t는 gps.h에서 정의됨 (header 필드 포함) */
 
 gps_unicore_resp_t gps_get_unicore_response(gps_t *gps);
 uint8_t gps_parse_unicore_term(gps_t *gps);
