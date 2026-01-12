@@ -26,7 +26,6 @@ static ble_instance_t ble_instance = {0};
 /*===========================================================================
  * 내부 함수 선언
  *===========================================================================*/
-static void ble_rx_task(void *pvParameter);
 static void ble_evt_handler(ble_t *ble, const ble_event_t *event);
 
 /*===========================================================================
@@ -50,14 +49,14 @@ void ble_app_start(void)
         return;
     }
 
-    /* RX 큐 생성 (IDLE 인터럽트 신호용) */
-    ble_instance.rx_queue = xQueueCreate(10, sizeof(uint8_t));
-    if (!ble_instance.rx_queue) {
-        LOG_ERR("BLE RX 큐 생성 실패");
+    /* RX 태스크 시작 (lib/ble에서 관리) */
+    if (!ble_rx_task_start(&ble_instance.ble)) {
+        LOG_ERR("BLE RX 태스크 시작 실패");
         return;
     }
 
-    ble_port_set_queue(ble_instance.rx_queue);
+    /* 인터럽트에서 사용할 큐 설정 */
+    ble_port_set_queue(ble_get_rx_queue(&ble_instance.ble));
 
     /* BLE 핸들 포인터 전달 (ble_port에서 링버퍼 접근용) */
     ble_port_set_ble_handle(&ble_instance.ble);
@@ -68,18 +67,7 @@ void ble_app_start(void)
     /* 포트 시작 (UART DMA 활성화) */
     ble_port_start(&ble_instance.ble);
 
-    /* RX 태스크 생성 */
-    BaseType_t ret = xTaskCreate(ble_rx_task, "ble_rx", 512,
-                                  &ble_instance, tskIDLE_PRIORITY + 1,
-                                  &ble_instance.rx_task);
-    if (ret != pdPASS) {
-        LOG_ERR("BLE RX 태스크 생성 실패");
-        vQueueDelete(ble_instance.rx_queue);
-        return;
-    }
-
     ble_instance.enabled = true;
-    ble_instance.running = true;
 
     LOG_INFO("BLE 앱 시작 완료");
 }
@@ -92,23 +80,11 @@ void ble_app_stop(void)
 
     LOG_INFO("BLE 앱 종료 시작");
 
-    ble_instance.running = false;
-
     /* 포트 종료 */
     ble_port_stop(&ble_instance.ble);
 
-    /* RX 태스크 종료 대기 */
-    if (ble_instance.rx_task) {
-        vTaskDelay(pdMS_TO_TICKS(100));
-        vTaskDelete(ble_instance.rx_task);
-        ble_instance.rx_task = NULL;
-    }
-
-    /* 큐 삭제 */
-    if (ble_instance.rx_queue) {
-        vQueueDelete(ble_instance.rx_queue);
-        ble_instance.rx_queue = NULL;
-    }
+    /* RX 태스크 종료 (lib/ble에서 관리) */
+    ble_rx_task_stop(&ble_instance.ble);
 
     ble_instance.enabled = false;
 
@@ -296,31 +272,6 @@ ble_mode_t ble_app_get_mode(void)
 /*===========================================================================
  * 내부 함수 구현
  *===========================================================================*/
-
-/**
- * @brief RX 태스크
- *
- * 인터럽트에서 DMA→링버퍼 쓰기 완료 후 신호 수신
- * 태스크는 링버퍼에서 읽어 파싱만 수행 (GPS 구조와 동일)
- */
-static void ble_rx_task(void *pvParameter)
-{
-    ble_instance_t *inst = (ble_instance_t *)pvParameter;
-    uint8_t dummy;
-
-    LOG_INFO("BLE RX 태스크 시작");
-
-    while (inst->running) {
-        /* RX 신호 대기 (타임아웃 100ms) */
-        if (xQueueReceive(inst->rx_queue, &dummy, pdMS_TO_TICKS(100)) == pdTRUE) {
-            /* 링버퍼에서 읽어서 파싱 */
-            ble_process_rx(&inst->ble);
-        }
-    }
-
-    LOG_INFO("BLE RX 태스크 종료");
-    vTaskDelete(NULL);
-}
 
 /**
  * @brief BLE 이벤트 핸들러

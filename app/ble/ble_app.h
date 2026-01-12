@@ -25,14 +25,8 @@
  * BLE 앱 인스턴스 (gps_instance_t 참고)
  *===========================================================================*/
 typedef struct {
-    ble_t ble;                      /**< BLE 핸들 (lib/ble) */
-
-    TaskHandle_t rx_task;           /**< RX 태스크 핸들 */
-    QueueHandle_t rx_queue;         /**< RX 신호 큐 */
-
+    ble_t ble;                      /**< BLE 핸들 (lib/ble) - 태스크/큐 포함 */
     bool enabled;                   /**< 활성화 상태 */
-    bool running;                   /**< 실행 중 상태 */
-
 } ble_instance_t;
 
 /*===========================================================================
