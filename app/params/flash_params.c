@@ -26,7 +26,7 @@ static const user_params_t user_default_params =
     .alt = "", // 62.0923
     .baseline_len = 100.0,
     .ble_device_name = "GuguBase",
-	.base_auto_fix_enabled = 1,
+	.base_auto_fix_enabled = 0,  // 임시 비활성화 (GPS 기본 기능 테스트용)
 };
 
 static user_params_t current_params;
