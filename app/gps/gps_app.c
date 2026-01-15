@@ -397,3 +397,16 @@ gps_t *gps_get_instance_handle(gps_id_t id) {
 
   return &gps_instances[id].gps;
 }
+
+/**
+ * @brief GPS ID로 동기 명령어 전송
+ */
+bool gps_send_command_sync(gps_id_t id, const char *cmd, uint32_t timeout_ms) {
+  gps_t *gps = gps_get_instance_handle(id);
+  if (gps == NULL) {
+    LOG_ERR("GPS[%d] 핸들을 찾을 수 없음", id);
+    return false;
+  }
+
+  return gps_send_cmd_sync(gps, cmd, timeout_ms);
+}
