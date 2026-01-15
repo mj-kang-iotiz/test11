@@ -7,9 +7,29 @@
 
 typedef struct gps_s gps_t;
 
-/* Forward declarations */
-typedef enum gps_event_type_e gps_event_type_t;
-typedef enum gps_protocol_e gps_protocol_t;
+/**
+ * @brief 프로토콜 타입
+ */
+typedef enum gps_protocol_e {
+    GPS_PROTOCOL_NONE = 0,
+    GPS_PROTOCOL_NMEA,            /**< $GPGGA, $GNGGA 등 NMEA-0183 */
+    GPS_PROTOCOL_UNICORE_CMD,     /**< $command,response:OK*XX (설정 명령어) */
+    GPS_PROTOCOL_UNICORE_BIN,     /**< 0xAA 0x44 0xB5 ... (Binary 메시지) */
+    GPS_PROTOCOL_RTCM,            /**< 0xD3 ... (RTCM3) */
+} gps_protocol_t;
+
+/**
+ * @brief 고수준 이벤트 타입 (애플리케이션 중심)
+ */
+typedef enum gps_event_type_e {
+    GPS_EVENT_NONE = 0,
+    GPS_EVENT_POSITION_UPDATED,   /**< 위치 업데이트 (GGA, BESTNAV, BESTPOS) */
+    GPS_EVENT_HEADING_UPDATED,    /**< 헤딩 업데이트 (THS, HEADING2) */
+    GPS_EVENT_VELOCITY_UPDATED,   /**< 속도 업데이트 (RMC, BESTVEL) */
+    GPS_EVENT_SATELLITE_UPDATED,  /**< 위성 정보 업데이트 (GSA, GSV) */
+    GPS_EVENT_RTCM_RECEIVED,      /**< RTCM 데이터 수신 (LoRa 전송용) */
+    GPS_EVENT_CMD_RESPONSE,       /**< 명령어 응답 수신 (OK/ERROR) */
+} gps_event_type_t;
 
 /**
  * @brief GPS 파싱 상태
