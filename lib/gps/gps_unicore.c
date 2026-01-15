@@ -307,7 +307,10 @@ parse_result_t unicore_bin_try_parse(gps_t *gps, ringbuffer_t *rb) {
     }
 
     /* 9. 헤더 정보 저장 */
+    const gps_unicore_bin_header_t *hdr = (const gps_unicore_bin_header_t *)header;
     gps->unicore_bin_data.last_msg_id = msg_id;
+    gps->unicore_bin_data.gps_week = hdr->wm;
+    gps->unicore_bin_data.gps_ms = hdr->ms;
     gps->unicore_bin_data.timestamp_ms = xTaskGetTickCount();
 
     /* 10. advance */
