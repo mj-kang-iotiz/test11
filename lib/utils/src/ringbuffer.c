@@ -223,7 +223,7 @@ bool ringbuffer_advance(ringbuffer_t *rb, size_t len)
     DEV_ASSERT(len < ringbuffer_capacity(rb));
 
     size_t available = ringbuffer_size(rb);
-    
+
     if(len > available)
     {
         ringbuffer_reset(rb);
