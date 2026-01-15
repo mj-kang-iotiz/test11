@@ -73,6 +73,11 @@ struct ble_s {
     /*--- 이벤트 핸들러 ---*/
     ble_evt_handler_t handler;      /**< 이벤트 콜백 */
     void *user_data;                /**< 사용자 데이터 */
+
+    /*--- RX 태스크 (lib에서 관리) ---*/
+    QueueHandle_t rx_queue;         /**< RX 신호 큐 */
+    TaskHandle_t rx_task;           /**< RX 태스크 핸들 */
+    volatile bool running;          /**< 태스크 실행 상태 */
 };
 
 /*===========================================================================
@@ -209,6 +214,33 @@ void ble_set_conn_state(ble_t *ble, ble_conn_state_t state);
  * @return true: 준비 완료
  */
 bool ble_is_ready(const ble_t *ble);
+
+/*===========================================================================
+ * RX 태스크 API
+ *===========================================================================*/
+
+/**
+ * @brief RX 태스크 시작
+ *
+ * 링버퍼에서 데이터 읽어 파싱하는 태스크 생성
+ *
+ * @param ble BLE 핸들
+ * @return true: 성공
+ */
+bool ble_rx_task_start(ble_t *ble);
+
+/**
+ * @brief RX 태스크 정지
+ * @param ble BLE 핸들
+ */
+void ble_rx_task_stop(ble_t *ble);
+
+/**
+ * @brief RX 큐 가져오기 (인터럽트에서 신호 전송용)
+ * @param ble BLE 핸들
+ * @return RX 큐 핸들
+ */
+QueueHandle_t ble_get_rx_queue(ble_t *ble);
 
 /*===========================================================================
  * 내부 API (app 레벨에서 사용)

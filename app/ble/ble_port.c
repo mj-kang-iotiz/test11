@@ -5,6 +5,7 @@
 
 #include "ble_port.h"
 #include "ble_app.h"
+#include "ble.h"
 #include "board_config.h"
 #include "board_type.h"
 #include "stm32f4xx_hal.h"
@@ -47,6 +48,7 @@ static int ble_configure_module(void);
 static char ble_recv_buf[BLE_RX_BUF_SIZE];
 static QueueHandle_t ble_rx_queue = NULL;
 static ble_t *ble_handle = NULL;
+static size_t ble_rx_old_pos = 0;
 
 /*===========================================================================
  * HAL ops 정의
@@ -432,6 +434,30 @@ void UART5_IRQHandler(void)
     if (LL_USART_IsActiveFlag_IDLE(UART5)) {
         LL_USART_ClearFlag_IDLE(UART5);
 
+        if (ble_handle != NULL) {
+            /* DMA 현재 위치 계산 */
+            size_t pos = sizeof(ble_recv_buf) - LL_DMA_GetDataLength(BLE_PORT_UART_DMA, BLE_PORT_UART_DMA_STREAM);
+
+            if (pos != ble_rx_old_pos) {
+                if (pos > ble_rx_old_pos) {
+                    /* 선형 데이터 */
+                    size_t len = pos - ble_rx_old_pos;
+                    ble_rx_write(ble_handle, (const uint8_t *)&ble_recv_buf[ble_rx_old_pos], len);
+                } else {
+                    /* 래핑된 데이터 (circular buffer wrap-around) */
+                    size_t len1 = sizeof(ble_recv_buf) - ble_rx_old_pos;
+                    ble_rx_write(ble_handle, (const uint8_t *)&ble_recv_buf[ble_rx_old_pos], len1);
+
+                    if (pos > 0) {
+                        ble_rx_write(ble_handle, (const uint8_t *)ble_recv_buf, pos);
+                    }
+                }
+
+                ble_rx_old_pos = pos;
+            }
+        }
+
+        /* 태스크에 처리 신호 전송 */
         if (ble_rx_queue != NULL) {
             uint8_t dummy = 0;
             xQueueSendFromISR(ble_rx_queue, &dummy, &xHigherPriorityTaskWoken);
