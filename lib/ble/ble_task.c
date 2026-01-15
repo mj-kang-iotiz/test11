@@ -41,6 +41,22 @@ static void ble_rx_task_func(void *pvParameter)
     while (ble->running) {
         /* RX 신호 대기 (타임아웃 100ms) */
         if (xQueueReceive(ble->rx_queue, &dummy, pdMS_TO_TICKS(100)) == pdTRUE) {
+            /* Raw 데이터 출력 (파싱 전) */
+#if (LOG_LEVEL >= LOG_LEVEL_DEBUG) && defined(BLE_DEBUG_RAW)
+            {
+                size_t avail = ringbuffer_size(&ble->rx_buf);
+                if (avail > 0) {
+                    char peek_buf[128];
+                    size_t peek_len = (avail > sizeof(peek_buf)) ? sizeof(peek_buf) : avail;
+                    if (ringbuffer_peek(&ble->rx_buf, peek_buf, peek_len, 0)) {
+                        LOG_DEBUG_RAW("BLE RX: ", peek_buf, peek_len);
+                        if (avail > sizeof(peek_buf)) {
+                            LOG_DEBUG("  ... +%u bytes more", (unsigned)(avail - sizeof(peek_buf)));
+                        }
+                    }
+                }
+            }
+#endif
             /* 링버퍼에서 읽어서 파싱 */
             ble_process_rx(ble);
         }
