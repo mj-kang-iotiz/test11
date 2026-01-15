@@ -186,11 +186,16 @@ parse_result_t unicore_ascii_try_parse(gps_t *gps, ringbuffer_t *rb) {
         return PARSE_INVALID;
     }
 
-    /* 6. Response 파싱 ("response:OK" 또는 "response:ERROR") */
+    /* 6. Response 파싱 ("response:OK" 또는 "response: OK") */
     gps_unicore_resp_t resp = GPS_UNICORE_RESP_UNKNOWN;
     const char *resp_str = strstr(buf, "response:");
     if (resp_str) {
         resp_str += 9;  /* "response:" 길이 */
+
+        /* 콜론 뒤 공백 건너뛰기 (UM982는 "response: OK" 형식) */
+        while (*resp_str == ' ' || *resp_str == '\t') {
+            resp_str++;
+        }
 
         /* 응답 전체 메시지 로그 출력 (명령어 초기화 시 확인용) */
         LOG_INFO("UM982 <- %s", resp_str);
@@ -370,8 +375,8 @@ static uint32_t calc_crc32(const uint8_t *buf, size_t len) {
 
 /**
  * @brief Unicore ASCII CRC 검증
- * 형식: $command,response:OK*XX (XOR checksum, $ 다음부터 * 전까지)
- * 단, ':' 이후는 CRC에 포함하지 않음
+ * 형식: $command,xxx,response: OK*XX (XOR checksum)
+ * CRC 범위: $ 다음부터 ':' 까지 (콜론 포함, 그 이후 공백과 OK/ERROR 제외)
  */
 static bool unicore_ascii_verify_crc(const char *buf, size_t len, size_t *star_pos) {
     const char *star = memchr(buf, '*', len);
@@ -383,9 +388,10 @@ static bool unicore_ascii_verify_crc(const char *buf, size_t len, size_t *star_p
 
     /* ':' 위치 찾기 */
     const char *colon = memchr(buf, ':', len);
-    const char *crc_end = colon ? colon : star;
+    /* CRC 계산 끝점: 콜론 포함 (colon + 1), 없으면 * 전까지 */
+    const char *crc_end = colon ? (colon + 1) : star;
 
-    /* CRC 계산 ($ 다음부터 : 또는 * 전까지) */
+    /* CRC 계산 ($ 다음부터 : 포함까지) */
     uint8_t calc_crc = 0;
     for (const char *p = buf + 1; p < crc_end; p++) {
         calc_crc ^= (uint8_t)*p;
