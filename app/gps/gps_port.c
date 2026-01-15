@@ -227,30 +227,6 @@ void USART2_IRQHandler(void)
 
     LL_USART_ClearFlag_IDLE(USART2);
   }
-  else if(LL_USART_IsActiveFlag_HT(USART2))
-  {
-    if(g_gps_instance && g_gps_instance->pkt_queue)
-    {
-      size_t len = sizeof(gps_recv_buf) - LL_DMA_GetDataLength(DMA1, LL_DMA_STREAM_5);
-      ringbuffer_write(&g_gps_instance->rx_buf, gps_recv_buf, len);
-      g_gps_instance->parser_ctx.stats.last_rx_tick = xTaskGetTickCountFromISR();
-      xQueueSendFromISR(g_gps_instance->pkt_queue, &dummy, &xHigherPriorityTaskWoken);
-    }
-
-    LL_USART_ClearFlag_HT(USART2);
-  }
-  else if(LL_USART_IsActiveFlag_TC(USART2)
-  {
-    if(g_gps_instance && g_gps_instance->pkt_queue)
-    {
-      size_t len = sizeof(gps_recv_buf) - LL_DMA_GetDataLength(DMA1, LL_DMA_STREAM_5);
-      ringbuffer_write(&g_gps_instance->rx_buf, gps_recv_buf, len);
-      g_gps_instance->parser_ctx.stats.last_rx_tick = xTaskGetTickCountFromISR();
-      xQueueSendFromISR(g_gps_instance->pkt_queue, &dummy, &xHigherPriorityTaskWoken);
-    }
-
-    LL_USART_ClearFlag_TC(USART2);
-  }
 
   if (LL_USART_IsActiveFlag_PE(USART2))
   {
@@ -275,7 +251,58 @@ void USART2_IRQHandler(void)
 /**
  * @brief This function handles DMA1 stream5 global interrupt.
  */
-void DMA1_Stream5_IRQHandler(void) {}
+void DMA1_Stream5_IRQHandler(void)
+{
+  BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+  uint8_t dummy = 0;
+  const size_t half_size = sizeof(gps_recv_buf) / 2;
+
+  // Half Transfer - 버퍼의 첫 번째 절반 처리
+  if (LL_DMA_IsActiveFlag_HT5(DMA1))
+  {
+    LL_DMA_ClearFlag_HT5(DMA1);
+
+    if (g_gps_instance && g_gps_instance->pkt_queue)
+    {
+      ringbuffer_write(&g_gps_instance->rx_buf, gps_recv_buf, half_size);
+      g_gps_instance->parser_ctx.stats.last_rx_tick = xTaskGetTickCountFromISR();
+      xQueueSendFromISR(g_gps_instance->pkt_queue, &dummy, &xHigherPriorityTaskWoken);
+    }
+  }
+
+  // Transfer Complete - 버퍼의 두 번째 절반 처리
+  if (LL_DMA_IsActiveFlag_TC5(DMA1))
+  {
+    LL_DMA_ClearFlag_TC5(DMA1);
+
+    if (g_gps_instance && g_gps_instance->pkt_queue)
+    {
+      ringbuffer_write(&g_gps_instance->rx_buf, &gps_recv_buf[half_size], half_size);
+      g_gps_instance->parser_ctx.stats.last_rx_tick = xTaskGetTickCountFromISR();
+      xQueueSendFromISR(g_gps_instance->pkt_queue, &dummy, &xHigherPriorityTaskWoken);
+    }
+  }
+
+  // Transfer Error
+  if (LL_DMA_IsActiveFlag_TE5(DMA1))
+  {
+    LL_DMA_ClearFlag_TE5(DMA1);
+  }
+
+  // FIFO Error
+  if (LL_DMA_IsActiveFlag_FE5(DMA1))
+  {
+    LL_DMA_ClearFlag_FE5(DMA1);
+  }
+
+  // Direct Mode Error
+  if (LL_DMA_IsActiveFlag_DME5(DMA1))
+  {
+    LL_DMA_ClearFlag_DME5(DMA1);
+  }
+
+  portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+}
 
 int gps_port_init(gps_t *gps_handle)
 {
