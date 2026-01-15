@@ -307,7 +307,8 @@ parse_result_t unicore_bin_try_parse(gps_t *gps, ringbuffer_t *rb) {
     }
 
     /* 9. 헤더 정보 저장 */
-    memcpy(&gps->unicore_bin_data.header, header, GPS_UNICORE_BIN_HEADER_SIZE);
+    gps->unicore_bin_data.last_msg_id = msg_id;
+    gps->unicore_bin_data.timestamp_ms = xTaskGetTickCount();
 
     /* 10. advance */
     ringbuffer_advance(rb, total_len);
