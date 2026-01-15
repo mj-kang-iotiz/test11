@@ -100,9 +100,9 @@ static void dwt_init(void) {
 
 void initThread(void *pvParameter) {
 	const board_config_t *config = board_get_config();
-  user_params_t* params = flash_params_get_current();
 
 	flash_params_init();
+	user_params_t* params = flash_params_get_current();
   //  flash_params_set_manual_position(true, "37.2901527", "127.033646955", "100.918");
 
 	//	flash_params_set_ntrip_url("www.gnssdata.or.kr");
