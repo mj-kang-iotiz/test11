@@ -1,0 +1,12 @@
+../app/gsm/gsm_app.c:35:6:gsm_task_create	2
+../app/gsm/gsm_app.c:42:6:gsm_start_rover	2
+../app/gsm/gsm_app.c:66:13:gsm_evt_handler	15
+../app/gsm/gsm_app.c:154:13:gsm_process_task	5
+../app/gsm/gsm_app.c:220:13:gsm_at_cmd_process_task	19
+../app/gsm/gsm_app.c:350:20:socket_state_to_str	6
+../app/gsm/gsm_app.c:376:13:socket_state_check_callback	9
+../app/gsm/gsm_app.c:448:13:socket_state_timer_callback	1
+../app/gsm/gsm_app.c:461:6:gsm_socket_monitor_start	3
+../app/gsm/gsm_app.c:493:6:gsm_socket_monitor_stop	2
+../app/gsm/gsm_app.c:505:6:gsm_socket_update_recv_time	2
+../app/gsm/gsm_app.c:514:6:gsm_at_power_off	1

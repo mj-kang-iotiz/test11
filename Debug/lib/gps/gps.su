@@ -1,0 +1,6 @@
+../lib/gps/gps.c:26:6:gps_init	32	static
+../lib/gps/gps.c:94:6:gps_set_evt_handler	16	static
+../lib/gps/gps.c:109:6:gps_send_cmd_sync	96	static
+../lib/gps/gps.c:159:13:gps_process_task	40	static
+../lib/gps/gps.c:197:6:gps_parse_process	24	static
+../lib/gps/gps.c:212:6:_gps_gga_raw_add	16	static

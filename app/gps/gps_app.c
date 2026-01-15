@@ -88,7 +88,7 @@ static const char *um982_rover_cmds[] = {
  * GPS 이벤트 핸들러
  *===========================================================================*/
 
-static void gps_evt_handler(gps_t *gps, const gps_event_t *event) {
+static void gps_app_evt_handler(gps_t *gps, const gps_event_t *event) {
   gps_instance_t *inst = NULL;
   const board_config_t *config = board_get_config();
 
@@ -113,15 +113,15 @@ static void gps_evt_handler(gps_t *gps, const gps_event_t *event) {
     // Base 모드: Fix 변경 시 base_auto_fix 모듈에 알림
     if (config->board == BOARD_TYPE_BASE_UM982) {
       if (event->data.position.fix_type != inst->last_fix) {
-        base_auto_fix_on_gps_fix_changed(event->data.position.fix_type);
+//        base_auto_fix_on_gps_fix_changed(event->data.position.fix_type);
         inst->last_fix = event->data.position.fix_type;
       }
 
       // RTK Fix 시 위치 업데이트
       if (event->data.position.fix_type == GPS_FIX_RTK_FIX) {
-        base_auto_fix_on_gga_update(event->data.position.latitude,
-                                     event->data.position.longitude,
-                                     event->data.position.altitude);
+//        base_auto_fix_on_gga_update(event->data.position.latitude,
+//                                     event->data.position.longitude,
+//                                     event->data.position.altitude);
       }
     }
     break;
@@ -217,7 +217,7 @@ static void gps_app_task(void *pvParameter) {
   }
 
   // 이벤트 핸들러 등록
-  gps_set_evt_handler(&inst->gps, gps_evt_handler);
+  gps_set_evt_handler(&inst->gps, gps_app_evt_handler);
 
   // 하드웨어 초기화
   if (gps_port_init(&inst->gps) != 0) {
@@ -350,22 +350,22 @@ void gps_app_start(void) {
   LOG_INFO("GPS 앱 시작 완료");
 
   // Base Auto-Fix 초기화 (필요시)
-  if (config->board == BOARD_TYPE_BASE_UM982) {
-    user_params_t *params = flash_params_get_current();
-    if (params->base_auto_fix_enabled) {
-      LOG_INFO("Base Auto-Fix 활성화");
+  // if (config->board == BOARD_TYPE_BASE_UM982) {
+  //   user_params_t *params = flash_params_get_current();
+  //   if (params->base_auto_fix_enabled) {
+  //     LOG_INFO("Base Auto-Fix 활성화");
 
-      if (base_auto_fix_init(GPS_ID_BASE)) {
-        if (base_auto_fix_start()) {
-          LOG_INFO("Base Auto-Fix 시작 성공");
-        } else {
-          LOG_ERR("Base Auto-Fix 시작 실패");
-        }
-      } else {
-        LOG_ERR("Base Auto-Fix 초기화 실패");
-      }
-    }
-  }
+  //     if (base_auto_fix_init(GPS_ID_BASE)) {
+  //       if (base_auto_fix_start()) {
+  //         LOG_INFO("Base Auto-Fix 시작 성공");
+  //       } else {
+  //         LOG_ERR("Base Auto-Fix 시작 실패");
+  //       }
+  //     } else {
+  //       LOG_ERR("Base Auto-Fix 초기화 실패");
+  //     }
+  //   }
+  // }
 }
 
 /**

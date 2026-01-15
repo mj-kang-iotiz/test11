@@ -1,0 +1,10 @@
+../app/gps/gps_app.c:91:13:gps_app_evt_handler	12
+../app/gps/gps_app.c:149:13:gps_send_um982_cmds	3
+../app/gps/gps_app.c:170:13:gps_init_um982_base	2
+../app/gps/gps_app.c:185:13:gps_init_um982_rover	2
+../app/gps/gps_app.c:204:13:gps_app_task	6
+../app/gps/gps_app.c:266:13:gps_app_create	6
+../app/gps/gps_app.c:313:13:gps_app_destroy	4
+../app/gps/gps_app.c:341:6:gps_app_start	3
+../app/gps/gps_app.c:374:6:gps_app_stop	3
+../app/gps/gps_app.c:393:8:gps_get_instance_handle	3

@@ -2,7 +2,6 @@
 #include "gps_app.h"
 #include "ntrip_app.h"
 #include "gsm_port.h"
-#include "ubx_init.h"
 #include "FreeRTOS.h"
 #include "task.h"
 #include "queue.h"

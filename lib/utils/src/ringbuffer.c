@@ -233,3 +233,4 @@ bool ringbuffer_advance(ringbuffer_t *rb, size_t len)
     rb->tail = (rb->tail + len) % rb->size;
     return true;
 }
+

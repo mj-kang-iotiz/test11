@@ -7,7 +7,6 @@
 #include "gps.h"
 #include "gps_parser.h"
 #include "gps_proto_def.h"
-#include "gps_parse.h"
 #include "dev_assert.h"
 #include <string.h>
 #include <stdlib.h>
@@ -192,6 +191,10 @@ parse_result_t unicore_ascii_try_parse(gps_t *gps, ringbuffer_t *rb) {
     if (resp_str) {
         resp_str += 9;  /* "response:" 길이 */
 
+        while(*resp_str == ' ' || *resp_str == '\t')
+        {
+        	resp_str++;
+        }
         /* 응답 전체 메시지 로그 출력 (명령어 초기화 시 확인용) */
         LOG_INFO("UM982 <- %s", resp_str);
 
@@ -383,7 +386,7 @@ static bool unicore_ascii_verify_crc(const char *buf, size_t len, size_t *star_p
 
     /* ':' 위치 찾기 */
     const char *colon = memchr(buf, ':', len);
-    const char *crc_end = colon ? colon : star;
+    const char *crc_end = colon ? (colon + 1) : star;
 
     /* CRC 계산 ($ 다음부터 : 또는 * 전까지) */
     uint8_t calc_crc = 0;

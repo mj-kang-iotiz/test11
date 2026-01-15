@@ -1,0 +1,7 @@
+../lib/gps/gps_parser.c:24:6:ringbuffer_find_char	40	static
+../lib/gps/gps_parser.c:41:9:hex_char_to_num	16	static
+../lib/gps/gps_parser.c:48:9:hex_to_byte	24	static
+../lib/gps/gps_parser.c:56:6:gps_parser_init	16	static
+../lib/gps/gps_parser.c:67:16:gps_parser_process	24	static
+../lib/gps/gps_parser.c:129:27:gps_parser_get_stats	16	static
+../lib/gps/gps_parser.c:134:6:gps_parser_reset_stats	16	static

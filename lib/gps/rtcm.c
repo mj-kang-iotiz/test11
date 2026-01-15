@@ -325,7 +325,7 @@ parse_result_t rtcm_try_parse(gps_t *gps, ringbuffer_t *rb) {
     /* 8. RTCM 데이터를 링버퍼에 저장 (LoRa 전송용) */
     if (xSemaphoreTake(gps->rtcm_data.mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
         /* 버퍼 공간 확인 후 쓰기 */
-        if (ringbuffer_free(&gps->rtcm_data.rb) >= total_len) {
+        if (ringbuffer_free_size(&gps->rtcm_data.rb) >= total_len) {
             ringbuffer_write(&gps->rtcm_data.rb, (char*)packet, total_len);
             gps->rtcm_data.last_msg_type = msg_type;
         } else {

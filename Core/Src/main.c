@@ -101,8 +101,9 @@ static void dwt_init(void) {
 void initThread(void *pvParameter) {
 	const board_config_t *config = board_get_config();
   user_params_t* params = flash_params_get_current();
-
+  dwt_init();
 	flash_params_init();
+	gps_app_start();
   //  flash_params_set_manual_position(true, "37.2901527", "127.033646955", "100.918");
 
 	//	flash_params_set_ntrip_url("www.gnssdata.or.kr");
@@ -123,35 +124,35 @@ void initThread(void *pvParameter) {
 	// flash_params_set_ntrip_id("nb030761");
 	// flash_params_set_ntrip_pw("ngii");
   
-  led_init();
-  
-  if(config->board == BOARD_TYPE_BASE_F9P || config->board == BOARD_TYPE_BASE_UM982)
-  {
-    gps_init_all();
-
-    if(params->use_manual_position == false)
-    {
-      // gsm_task_create(NULL);
-    }
-    
-    // lora_instance_init();
-  }
-
-  if(config->use_rs485)
-  {
-    dwt_init();
-
-    #if USE_SOFTUART
-      rs485_app_init();
-#else
-      rs485_init_all();
-    #endif
-  }
-
-  if(config->use_ble)
-  {
-	  ble_app_start();
-  }
+//  led_init();
+//
+//  if(config->board == BOARD_TYPE_BASE_F9P || config->board == BOARD_TYPE_BASE_UM982)
+//  {
+//    gps_init_all();
+//
+//    if(params->use_manual_position == false)
+//    {
+//      // gsm_task_create(NULL);
+//    }
+//
+//    // lora_instance_init();
+//  }
+//
+//  if(config->use_rs485)
+//  {
+//    dwt_init();
+//
+//    #if USE_SOFTUART
+//      rs485_app_init();
+//#else
+//      rs485_init_all();
+//    #endif
+//  }
+//
+//  if(config->use_ble)
+//  {
+//	  ble_app_start();
+//  }
 
   vTaskDelete(NULL);
 }

@@ -1,0 +1,14 @@
+../app/params/flash_params.c:34:19:flash_params_erase	2
+../app/params/flash_params.c:69:19:flash_params_read	4
+../app/params/flash_params.c:96:19:flash_params_write	3
+../app/params/flash_params.c:130:16:flash_params_get_current	1
+../app/params/flash_params.c:135:19:flash_params_save	5
+../app/params/flash_params.c:162:19:flash_params_init	1
+../app/params/flash_params.c:167:6:flash_params_set_ntrip_url	1
+../app/params/flash_params.c:173:6:flash_params_set_ntrip_port	1
+../app/params/flash_params.c:179:6:flash_params_set_ntrip_id	1
+../app/params/flash_params.c:185:6:flash_params_set_ntrip_pw	1
+../app/params/flash_params.c:191:6:flash_params_set_ntrip_mountpoint	1
+../app/params/flash_params.c:197:6:flash_params_set_manual_position	4
+../app/params/flash_params.c:220:6:flash_params_set_baseline_len	1
+../app/params/flash_params.c:225:6:flash_params_set_ble_device_name	1

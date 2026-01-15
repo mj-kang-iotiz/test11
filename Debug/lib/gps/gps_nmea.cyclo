@@ -1,0 +1,12 @@
+../lib/gps/gps_nmea.c:53:20:nmea_msg_to_str	10
+../lib/gps/gps_nmea.c:70:16:nmea_try_parse	33
+../lib/gps/gps_nmea.c:231:13:nmea_verify_crc	4
+../lib/gps/gps_nmea.c:255:15:nmea_count_fields	4
+../lib/gps/gps_nmea.c:267:15:parse_lat_lon_str	4
+../lib/gps/gps_nmea.c:278:20:get_field	5
+../lib/gps/gps_nmea.c:294:15:parse_field_double	4
+../lib/gps/gps_nmea.c:302:12:parse_field_int	4
+../lib/gps/gps_nmea.c:310:13:parse_field_char	4
+../lib/gps/gps_nmea.c:318:13:nmea_parse_gga	5
+../lib/gps/gps_nmea.c:369:13:nmea_parse_rmc	1
+../lib/gps/gps_nmea.c:379:13:nmea_parse_ths	1

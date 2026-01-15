@@ -1,0 +1,7 @@
+../lib/parser/parser.c:13:9:parse_int32	6
+../lib/parser/parser.c:36:10:parse_uint32	4
+../lib/parser/parser.c:54:10:parse_hex	14
+../lib/parser/parser.c:71:8:parse_double	8
+../lib/parser/parser.c:104:6:parse_char	6
+../lib/parser/parser.c:121:9:parse_string	13
+../lib/parser/parser.c:176:9:parse_string_quoted	13

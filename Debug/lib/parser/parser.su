@@ -1,0 +1,7 @@
+../lib/parser/parser.c:13:9:parse_int32	32	static
+../lib/parser/parser.c:36:10:parse_uint32	24	static
+../lib/parser/parser.c:54:10:parse_hex	24	static
+../lib/parser/parser.c:71:8:parse_double	56	static
+../lib/parser/parser.c:104:6:parse_char	24	static
+../lib/parser/parser.c:121:9:parse_string	32	static
+../lib/parser/parser.c:176:9:parse_string_quoted	32	static

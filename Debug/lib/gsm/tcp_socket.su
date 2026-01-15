@@ -1,0 +1,12 @@
+../lib/gsm/tcp_socket.c:29:15:tcp_socket_create	24	static
+../lib/gsm/tcp_socket.c:64:5:tcp_connect	56	static
+../lib/gsm/tcp_socket.c:87:5:tcp_send	40	static
+../lib/gsm/tcp_socket.c:105:6:tcp_set_recv_timeout	16	static
+../lib/gsm/tcp_socket.c:116:5:tcp_recv	64	static
+../lib/gsm/tcp_socket.c:152:5:tcp_close	24	static
+../lib/gsm/tcp_socket.c:171:5:tcp_close_force	24	static
+../lib/gsm/tcp_socket.c:187:6:tcp_socket_destroy	24	static
+../lib/gsm/tcp_socket.c:210:8:tcp_available	16	static
+../lib/gsm/tcp_socket.c:219:13:_internal_recv_callback	24	static
+../lib/gsm/tcp_socket.c:244:13:_internal_close_callback	24	static
+../lib/gsm/tcp_socket.c:264:17:tcp_get_socket_state	16	static

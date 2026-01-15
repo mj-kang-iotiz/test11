@@ -1,0 +1,7 @@
+../lib/led/led.c:27:6:led_set_color	16	static
+../lib/led/led.c:35:13:led_get_color	16	static
+../lib/led/led.c:40:6:_set_color	16	static
+../lib/led/led.c:72:6:led_set_state	24	static
+../lib/led/led.c:79:6:led_set_toggle	24	static
+../lib/led/led.c:94:6:led_clear_all	16	static
+../lib/led/led.c:101:6:led_init	8	static

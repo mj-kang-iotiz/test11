@@ -1,0 +1,17 @@
+../lib/utils/src/ringbuffer.c:11:6:ringbuffer_init	24	static
+../lib/utils/src/ringbuffer.c:24:6:ringbuffer_deinit	16	static
+../lib/utils/src/ringbuffer.c:30:6:ringbuffer_reset	16	static
+../lib/utils/src/ringbuffer.c:39:6:ringbuffer_is_empty	16	static
+../lib/utils/src/ringbuffer.c:45:6:ringbuffer_is_full	16	static
+../lib/utils/src/ringbuffer.c:51:6:ringbuffer_is_overflow	16	static
+../lib/utils/src/ringbuffer.c:57:8:ringbuffer_get_overflow_count	16	static
+../lib/utils/src/ringbuffer.c:63:8:ringbuffer_capacity	16	static
+../lib/utils/src/ringbuffer.c:69:8:ringbuffer_size	24	static
+../lib/utils/src/ringbuffer.c:85:8:ringbuffer_free_size	24	static
+../lib/utils/src/ringbuffer.c:91:6:ringbuffer_write	40	static
+../lib/utils/src/ringbuffer.c:121:6:ringbuffer_write_byte	16	static
+../lib/utils/src/ringbuffer.c:136:8:ringbuffer_read	40	static
+../lib/utils/src/ringbuffer.c:163:6:ringbuffer_read_byte	16	static
+../lib/utils/src/ringbuffer.c:177:6:ringbuffer_peek	48	static
+../lib/utils/src/ringbuffer.c:208:6:ringbuffer_peek_byte	16	static
+../lib/utils/src/ringbuffer.c:220:6:ringbuffer_advance	24	static

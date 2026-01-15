@@ -1,0 +1,10 @@
+../lib/gps/gps_unicore.c:112:20:unicore_bin_msg_to_str	16	static
+../lib/gps/gps_unicore.c:122:20:unicore_resp_to_str	16	static
+../lib/gps/gps_unicore.c:137:16:unicore_ascii_try_parse	240	static
+../lib/gps/gps_unicore.c:238:16:unicore_bin_try_parse	656	static
+../lib/gps/gps_unicore.c:366:17:calc_crc32	24	static
+../lib/gps/gps_unicore.c:379:13:unicore_ascii_verify_crc	48	static
+../lib/gps/gps_unicore.c:404:13:unicore_bin_parse_bestnav	144	static
+../lib/gps/gps_unicore.c:436:20:gps_get_unicore_response	16	static
+../lib/gps/gps_unicore.c:442:9:gps_parse_unicore_term	16	static
+../lib/gps/gps_unicore.c:448:9:gps_parse_unicore_bin	16	static

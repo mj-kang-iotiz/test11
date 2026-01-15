@@ -165,8 +165,16 @@ static void gps_process_task(void *pvParameter) {
 
     while (gps->is_running) {
         /* RX 신호 대기 (UART ISR에서 queue send) */
-        if (xQueueReceive(gps->pkt_queue, &dummy, pdMS_TO_TICKS(1000)) == pdTRUE) {
+        if (xQueueReceive(gps->pkt_queue, &dummy, portMAX_DELAY) == pdTRUE) {
             /* 새 파서로 패킷 파싱 */
+            static char buf[2048];
+            size_t len = ringbuffer_size(&gps->rx_buf);
+            if (len > 0) {
+                len = (len > sizeof(buf)) ? sizeof(buf) : len;
+                ringbuffer_peek(&gps->rx_buf, buf, len, 0);
+                LOG_DEBUG_RAW("", buf, len);
+            }
+
             gps_parser_process(gps);
         }
 
