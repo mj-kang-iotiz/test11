@@ -88,7 +88,7 @@ static const char *um982_rover_cmds[] = {
  * GPS 이벤트 핸들러
  *===========================================================================*/
 
-static void gps_evt_handler(gps_t *gps, const gps_event_t *event) {
+static void gps_app_evt_handler(gps_t *gps, const gps_event_t *event) {
   gps_instance_t *inst = NULL;
   const board_config_t *config = board_get_config();
 
@@ -217,7 +217,7 @@ static void gps_app_task(void *pvParameter) {
   }
 
   // 이벤트 핸들러 등록
-  gps_set_evt_handler(&inst->gps, gps_evt_handler);
+  gps_set_evt_handler(&inst->gps, gps_app_evt_handler);
 
   // 하드웨어 초기화
   if (gps_port_init(&inst->gps) != 0) {

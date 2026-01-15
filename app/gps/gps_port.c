@@ -21,6 +21,47 @@
 static char gps_recv_buf[2048];
 static char gps_rb_buffer[2048];
 static gps_t *g_gps_instance = NULL;
+static volatile size_t gps_dma_old_pos = 0;  // 마지막 처리 위치 추적
+
+/**
+ * @brief DMA 수신 데이터 처리 (HT/TC/IDLE 공통)
+ * @note MaJerle의 old_pos/pos 추적 방식 사용
+ */
+static void gps_dma_process_data(void)
+{
+  BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+  uint8_t dummy = 0;
+
+  if (!g_gps_instance || !g_gps_instance->pkt_queue)
+    return;
+
+  // 현재 DMA 위치 계산
+  size_t pos = sizeof(gps_recv_buf) - LL_DMA_GetDataLength(DMA1, LL_DMA_STREAM_5);
+
+  if (pos != gps_dma_old_pos)
+  {
+    if (pos > gps_dma_old_pos)
+    {
+      // 선형: old_pos ~ pos
+      ringbuffer_write(&g_gps_instance->rx_buf, &gps_recv_buf[gps_dma_old_pos], pos - gps_dma_old_pos);
+    }
+    else
+    {
+      // 순환: old_pos ~ 끝, 0 ~ pos
+      ringbuffer_write(&g_gps_instance->rx_buf, &gps_recv_buf[gps_dma_old_pos], sizeof(gps_recv_buf) - gps_dma_old_pos);
+      if (pos > 0)
+      {
+        ringbuffer_write(&g_gps_instance->rx_buf, gps_recv_buf, pos);
+      }
+    }
+
+    gps_dma_old_pos = pos;
+    g_gps_instance->parser_ctx.stats.last_rx_tick = xTaskGetTickCountFromISR();
+    xQueueSendFromISR(g_gps_instance->pkt_queue, &dummy, &xHigherPriorityTaskWoken);
+  }
+
+  portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+}
 
 /**
  * @brief USART2 Initialization Function
@@ -211,45 +252,10 @@ static const gps_hal_ops_t gps_rtk_uart2_ops = {
  */
 void USART2_IRQHandler(void)
 {
-  BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-  uint8_t dummy = 0;
-
   if (LL_USART_IsActiveFlag_IDLE(USART2))
   {
-    if(g_gps_instance && g_gps_instance->pkt_queue)
-    {
-      size_t len = sizeof(gps_recv_buf) - LL_DMA_GetDataLength(DMA1, LL_DMA_STREAM_5);
-      ringbuffer_write(&g_gps_instance->rx_buf, gps_recv_buf, len);
-      g_gps_instance->parser_ctx.stats.last_rx_tick = xTaskGetTickCountFromISR();
-
-      xQueueSendFromISR(g_gps_instance->pkt_queue, &dummy, &xHigherPriorityTaskWoken);
-    }
-
     LL_USART_ClearFlag_IDLE(USART2);
-  }
-  else if(LL_USART_IsActiveFlag_HT(USART2))
-  {
-    if(g_gps_instance && g_gps_instance->pkt_queue)
-    {
-      size_t len = sizeof(gps_recv_buf) - LL_DMA_GetDataLength(DMA1, LL_DMA_STREAM_5);
-      ringbuffer_write(&g_gps_instance->rx_buf, gps_recv_buf, len);
-      g_gps_instance->parser_ctx.stats.last_rx_tick = xTaskGetTickCountFromISR();
-      xQueueSendFromISR(g_gps_instance->pkt_queue, &dummy, &xHigherPriorityTaskWoken);
-    }
-
-    LL_USART_ClearFlag_HT(USART2);
-  }
-  else if(LL_USART_IsActiveFlag_TC(USART2)
-  {
-    if(g_gps_instance && g_gps_instance->pkt_queue)
-    {
-      size_t len = sizeof(gps_recv_buf) - LL_DMA_GetDataLength(DMA1, LL_DMA_STREAM_5);
-      ringbuffer_write(&g_gps_instance->rx_buf, gps_recv_buf, len);
-      g_gps_instance->parser_ctx.stats.last_rx_tick = xTaskGetTickCountFromISR();
-      xQueueSendFromISR(g_gps_instance->pkt_queue, &dummy, &xHigherPriorityTaskWoken);
-    }
-
-    LL_USART_ClearFlag_TC(USART2);
+    gps_dma_process_data();
   }
 
   if (LL_USART_IsActiveFlag_PE(USART2))
@@ -268,14 +274,45 @@ void USART2_IRQHandler(void)
   {
     LL_USART_ClearFlag_NE(USART2);
   }
-
-  portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
 }
 
 /**
  * @brief This function handles DMA1 stream5 global interrupt.
  */
-void DMA1_Stream5_IRQHandler(void) {}
+void DMA1_Stream5_IRQHandler(void)
+{
+  // Half Transfer - 처리 시점 트리거
+  if (LL_DMA_IsActiveFlag_HT5(DMA1))
+  {
+    LL_DMA_ClearFlag_HT5(DMA1);
+    gps_dma_process_data();
+  }
+
+  // Transfer Complete - 처리 시점 트리거
+  if (LL_DMA_IsActiveFlag_TC5(DMA1))
+  {
+    LL_DMA_ClearFlag_TC5(DMA1);
+    gps_dma_process_data();
+  }
+
+  // Transfer Error
+  if (LL_DMA_IsActiveFlag_TE5(DMA1))
+  {
+    LL_DMA_ClearFlag_TE5(DMA1);
+  }
+
+  // FIFO Error
+  if (LL_DMA_IsActiveFlag_FE5(DMA1))
+  {
+    LL_DMA_ClearFlag_FE5(DMA1);
+  }
+
+  // Direct Mode Error
+  if (LL_DMA_IsActiveFlag_DME5(DMA1))
+  {
+    LL_DMA_ClearFlag_DME5(DMA1);
+  }
+}
 
 int gps_port_init(gps_t *gps_handle)
 {
