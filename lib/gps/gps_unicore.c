@@ -370,7 +370,8 @@ static uint32_t calc_crc32(const uint8_t *buf, size_t len) {
 
 /**
  * @brief Unicore ASCII CRC 검증
- * 형식: $command,response:OK*XX (XOR checksum, $ 다음부터 * 전까지)
+ * 형식: $command,response:OK*XX (XOR checksum, $ 다음부터 : 까지 포함)
+ * ':' 가 없으면 * 전까지 계산
  */
 static bool unicore_ascii_verify_crc(const char *buf, size_t len, size_t *star_pos) {
     const char *star = memchr(buf, '*', len);
@@ -380,9 +381,13 @@ static bool unicore_ascii_verify_crc(const char *buf, size_t len, size_t *star_p
 
     *star_pos = star - buf;
 
-    /* CRC 계산 ($ 다음부터 * 전까지 전체) */
+    /* ':' 위치 찾기 - ':' 까지 포함해서 계산 */
+    const char *colon = memchr(buf, ':', len);
+    const char *crc_end = colon ? (colon + 1) : star;
+
+    /* CRC 계산 ($ 다음부터 : 포함 또는 * 전까지) */
     uint8_t calc_crc = 0;
-    for (const char *p = buf + 1; p < star; p++) {
+    for (const char *p = buf + 1; p < crc_end; p++) {
         calc_crc ^= (uint8_t)*p;
     }
 
