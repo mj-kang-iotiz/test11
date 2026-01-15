@@ -7,7 +7,6 @@
 #include "gps.h"
 #include "gps_parser.h"
 #include "gps_proto_def.h"
-#include "gps_parse.h"
 #include "dev_assert.h"
 #include <string.h>
 #include <stdlib.h>
@@ -389,23 +388,3 @@ static void nmea_parse_ths(gps_t *gps, const char *buf, size_t len) {
     gps->nmea_data.ths.mode = (gps_ths_mode_t)parse_field_char(field);
 }
 
-/*===========================================================================
- * 레거시 API (기존 코드 호환용 - deprecated)
- *===========================================================================*/
-
-/* 기존 바이트 단위 파싱용 내부 함수들 */
-static double parse_lat_lon_legacy(gps_t *gps) {
-    double val, deg, min;
-    val = gps_parse_double(gps);
-    deg = (double)((int)(((int)val / 100)));
-    min = val - (deg * (double)100);
-    val = deg + (min / (double)(60));
-    return val;
-}
-
-uint8_t gps_parse_nmea_term(gps_t *gps) {
-    /* 기존 바이트 단위 파싱 - deprecated, 호환용으로만 유지 */
-    (void)gps;
-    (void)parse_lat_lon_legacy;
-    return 1;
-}

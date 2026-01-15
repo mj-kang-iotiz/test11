@@ -89,6 +89,4 @@ typedef struct {
   uint8_t star;
 } gps_nmea_parser_t;
 
-uint8_t gps_parse_nmea_term(gps_t *gps);
-
 #endif

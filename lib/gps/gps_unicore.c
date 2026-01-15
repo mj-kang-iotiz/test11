@@ -307,7 +307,11 @@ parse_result_t unicore_bin_try_parse(gps_t *gps, ringbuffer_t *rb) {
     }
 
     /* 9. 헤더 정보 저장 */
-    memcpy(&gps->unicore_bin_data.header, header, GPS_UNICORE_BIN_HEADER_SIZE);
+    const gps_unicore_bin_header_t *hdr = (const gps_unicore_bin_header_t *)header;
+    gps->unicore_bin_data.last_msg_id = msg_id;
+    gps->unicore_bin_data.gps_week = hdr->wm;
+    gps->unicore_bin_data.gps_ms = hdr->ms;
+    gps->unicore_bin_data.timestamp_ms = xTaskGetTickCount();
 
     /* 10. advance */
     ringbuffer_advance(rb, total_len);
@@ -405,20 +409,20 @@ static void unicore_bin_parse_bestnav(gps_t *gps, const uint8_t *payload, size_t
 
     /* 공용 위치 필드 업데이트 */
     gps->unicore_bin_data.position.valid = true;
-    gps->unicore_bin_data.position.latitude = nav.latitude * (180.0 / M_PI);  /* rad -> deg */
-    gps->unicore_bin_data.position.longitude = nav.longitude * (180.0 / M_PI);
-    gps->unicore_bin_data.position.altitude = nav.altitude;
+    gps->unicore_bin_data.position.latitude = nav.lat;
+    gps->unicore_bin_data.position.longitude = nav.lon;
+    gps->unicore_bin_data.position.altitude = nav.height;
     gps->unicore_bin_data.position.pos_type = nav.pos_type;
-    gps->unicore_bin_data.position.lat_std = nav.lat_std;
-    gps->unicore_bin_data.position.lon_std = nav.lon_std;
-    gps->unicore_bin_data.position.alt_std = nav.alt_std;
+    gps->unicore_bin_data.position.lat_std = nav.lat_dev;
+    gps->unicore_bin_data.position.lon_std = nav.lon_dev;
+    gps->unicore_bin_data.position.alt_std = nav.height_dev;
     gps->unicore_bin_data.position.source_msg = 2118;  /* BESTNAV */
 
     /* 공용 속도 필드 업데이트 */
     gps->unicore_bin_data.velocity.valid = true;
-    gps->unicore_bin_data.velocity.hor_speed = nav.hor_spd;
+    gps->unicore_bin_data.velocity.hor_speed = nav.hor_speed;
     gps->unicore_bin_data.velocity.trk_gnd = nav.trk_gnd;
-    gps->unicore_bin_data.velocity.ver_speed = nav.ver_spd;
+    gps->unicore_bin_data.velocity.ver_speed = nav.vert_speed;
     gps->unicore_bin_data.velocity.source_msg = 2118;  /* BESTNAV */
 }
 
