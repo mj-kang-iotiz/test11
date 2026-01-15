@@ -14,7 +14,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include "ringbuffer.h"
-#include "gps_types.h"
+#include "gps_event.h"
 
 /*===========================================================================
  * 파서 결과 타입
