@@ -341,6 +341,10 @@ parse_result_t unicore_bin_try_parse(gps_t *gps, ringbuffer_t *rb) {
             event.data.position.fix_type = gps->unicore_bin_data.position.pos_type;
             event.data.position.sat_count = 0;  /* BESTNAV에는 위성 수 없음 */
             event.data.position.hdop = 0.0;
+            /* 표준편차 (굴삭기 정밀도 판단용) */
+            event.data.position.lat_std = gps->unicore_bin_data.position.lat_std;
+            event.data.position.lon_std = gps->unicore_bin_data.position.lon_std;
+            event.data.position.alt_std = gps->unicore_bin_data.position.alt_std;
             gps->handler(gps, &event);
 
             /* 속도 이벤트도 발생 */

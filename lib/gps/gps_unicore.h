@@ -12,6 +12,28 @@
 #define GPS_UNICORE_BIN_SYNC_2 0x44
 #define GPS_UNICORE_BIN_SYNC_3 0xB5
 
+/**
+ * @brief BESTNAV pos_type 값 (위치 솔루션 타입)
+ * GGA의 gps_fix_t와 다른 값 체계이므로 주의!
+ */
+typedef enum {
+    GPS_POS_TYPE_NONE        = 0,   /**< 솔루션 없음 */
+    GPS_POS_TYPE_RTK_FIXED   = 16,  /**< RTK Fixed (cm급 정밀도) */
+    GPS_POS_TYPE_RTK_FLOAT   = 17,  /**< RTK Float (dm급 정밀도) */
+    GPS_POS_TYPE_SBAS        = 18,  /**< SBAS */
+    GPS_POS_TYPE_PSRDIFF     = 32,  /**< PSRDIFF */
+    GPS_POS_TYPE_WAAS        = 33,  /**< WAAS */
+    GPS_POS_TYPE_PPP         = 34,  /**< PPP (Precise Point Positioning) */
+    GPS_POS_TYPE_SINGLE      = 50,  /**< 단독 측위 (m급 정밀도) */
+    GPS_POS_TYPE_INS_PSRSP   = 52,  /**< INS + Single Point */
+    GPS_POS_TYPE_INS_PSRDIFF = 53,  /**< INS + PSRDIFF */
+    GPS_POS_TYPE_INS_RTK_FLOAT = 54, /**< INS + RTK Float */
+    GPS_POS_TYPE_INS_RTK_FIXED = 55, /**< INS + RTK Fixed */
+} gps_pos_type_t;
+
+/** @brief RTK Fixed 상태인지 확인하는 매크로 */
+#define GPS_IS_RTK_FIXED(pos_type) ((pos_type) == GPS_POS_TYPE_RTK_FIXED || (pos_type) == GPS_POS_TYPE_INS_RTK_FIXED)
+
 typedef enum {
   GPS_UNICORE_MSG_NONE = 0,
   GPS_UNICORE_MSG_COMMAND = 1

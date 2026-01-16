@@ -50,9 +50,12 @@ typedef struct {
       double latitude;        /**< 위도 (degree) */
       double longitude;       /**< 경도 (degree) */
       double altitude;        /**< 고도 (meter) */
-      uint8_t fix_type;       /**< Fix 타입 (GPS_FIX_xxx) */
+      uint8_t fix_type;       /**< Fix 타입 (pos_type: 0=NONE, 16=RTK_FIXED, 17=RTK_FLOAT) */
       uint8_t sat_count;      /**< 위성 수 */
       double hdop;            /**< 수평 정밀도 */
+      float lat_std;          /**< 위도 표준편차 (meter) */
+      float lon_std;          /**< 경도 표준편차 (meter) */
+      float alt_std;          /**< 고도 표준편차 (meter) */
     } position;
 
     /* 헤딩 업데이트 */
