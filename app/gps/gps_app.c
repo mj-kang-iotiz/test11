@@ -1,5 +1,6 @@
 #include "gps_app.h"
 #include "board_config.h"
+#include "event_bus.h"
 #include "gps.h"
 #include "gps_port.h"
 #include "gps_role.h"
@@ -12,7 +13,6 @@
 #include "flash_params.h"
 #include <math.h>
 #include <stdio.h>
-#include "base_auto_fix.h"
 #include "ble_app.h"
 
 #ifndef TAG
@@ -106,18 +106,32 @@ static void gps_app_evt_handler(gps_t *gps, const gps_event_t *event) {
               event->data.position.latitude, event->data.position.longitude,
               event->data.position.altitude, event->data.position.fix_type);
 
-    /* Base 모드: Fix 변경 시 base_auto_fix 모듈에 알림 */
+    /* Base 모드: 이벤트 버스로 GPS 상태 발행 */
     if (gps_role_is_base()) {
       if (event->data.position.fix_type != ctx->last_fix) {
-        // base_auto_fix_on_gps_fix_changed(event->data.position.fix_type);
+        event_t ev = {
+          .type = EVENT_GPS_FIX_CHANGED,
+          .data.gps_fix = {
+            .fix = event->data.position.fix_type,
+            .gps_id = GPS_ID_BASE
+          }
+        };
+        event_bus_publish(&ev);
         ctx->last_fix = event->data.position.fix_type;
       }
 
       /* RTK Fix 시 위치 업데이트 */
       if (event->data.position.fix_type == GPS_FIX_RTK_FIX) {
-        // base_auto_fix_on_gga_update(event->data.position.latitude,
-        //                              event->data.position.longitude,
-        //                              event->data.position.altitude);
+        event_t ev = {
+          .type = EVENT_GPS_GGA_UPDATE,
+          .data.gps_gga = {
+            .lat = event->data.position.latitude,
+            .lon = event->data.position.longitude,
+            .alt = event->data.position.altitude,
+            .gps_id = GPS_ID_BASE
+          }
+        };
+        event_bus_publish(&ev);
       }
     }
     break;
