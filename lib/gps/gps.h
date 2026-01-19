@@ -66,6 +66,7 @@ typedef struct {
         float hdop;                 /**< HDOP (GGA가 업데이트) */
         uint32_t fix_timestamp_ms;  /**< Fix 업데이트 시각 */
         uint32_t sat_timestamp_ms;  /**< 위성수 업데이트 시각 */
+        bool fix_changed;           /**< Fix 상태 변경됨 (이벤트 발생용) */
     } status;
 
 } gps_common_data_t;

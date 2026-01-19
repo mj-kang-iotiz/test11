@@ -181,11 +181,13 @@ parse_result_t nmea_try_parse(gps_t *gps, ringbuffer_t *rb) {
 
         /* 메시지 타입별로 적절한 이벤트 생성 */
         if (msg_id == GPS_NMEA_MSG_GGA) {
-            /* Fix 상태 업데이트 이벤트 (위치는 BESTNAV에서 업데이트) */
-            event.type = GPS_EVENT_FIX_UPDATED;
-            event.data.fix.fix_type = gps->nmea_data.gga.fix;
-            event.data.fix.hdop = gps->nmea_data.gga.hdop;
-            gps->handler(gps, &event);
+            /* Fix 상태가 변경된 경우에만 이벤트 발생 */
+            if (gps->data.status.fix_changed) {
+                event.type = GPS_EVENT_FIX_UPDATED;
+                event.data.fix.fix_type = gps->data.status.fix_type;
+                event.data.fix.hdop = gps->data.status.hdop;
+                gps->handler(gps, &event);
+            }
         } else if (msg_id == GPS_NMEA_MSG_THS) {
             /* 헤딩 업데이트 이벤트 */
             event.type = GPS_EVENT_HEADING_UPDATED;
@@ -359,6 +361,10 @@ static void nmea_parse_gga(gps_t *gps, const char *buf, size_t len) {
     gps->nmea_data.gga.geo_sep = parse_field_double(field);
 
     /* === 공용 데이터 업데이트 (fix_type, hdop만) === */
+    /* 이전값과 비교하여 변경 여부 판단 */
+    gps_fix_t prev_fix = gps->data.status.fix_type;
+    gps->data.status.fix_changed = (prev_fix != gps->nmea_data.gga.fix);
+
     gps->data.status.fix_type = gps->nmea_data.gga.fix;
     gps->data.status.hdop = gps->nmea_data.gga.hdop;
     gps->data.status.fix_timestamp_ms = xTaskGetTickCount();
