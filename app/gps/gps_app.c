@@ -146,37 +146,86 @@ static void gps_app_evt_handler(gps_t *gps, const gps_event_t *event) {
  * UM982 초기화 함수
  *===========================================================================*/
 
-static bool gps_send_um982_cmds(gps_t *gps, const char **cmds, size_t count) {
-  bool all_ok = true;
+#define GPS_CMD_MAX_RETRIES     3       /* 최대 재시도 횟수 */
+#define GPS_CMD_RETRY_DELAY_MS  200     /* 재시도 간 대기 시간 (ms) */
+#define GPS_CMD_TIMEOUT_MS      2000    /* 명령어 타임아웃 (ms) */
+#define GPS_CMD_INTERVAL_MS     100     /* 명령어 간 대기 시간 (ms) */
 
-  for (size_t i = 0; i < count; i++) {
-    LOG_INFO("[%d/%d] UM982 -> %s", i + 1, count, cmds[i]);
-
-    bool result = gps_send_cmd_sync(gps, cmds[i], 2000);
-
-    if (result) {
-      LOG_INFO("[%d/%d] 성공", i + 1, count);
+/**
+ * @brief 단일 명령어 전송 (재시도 포함)
+ *
+ * @param gps GPS 핸들
+ * @param cmd 명령어 문자열
+ * @param cmd_idx 명령어 인덱스 (로그용)
+ * @param total_cmds 전체 명령어 수 (로그용)
+ * @return true: 성공, false: 재시도 후에도 실패
+ */
+static bool gps_send_cmd_with_retry(gps_t *gps, const char *cmd,
+                                     size_t cmd_idx, size_t total_cmds) {
+  for (int retry = 0; retry < GPS_CMD_MAX_RETRIES; retry++) {
+    if (retry > 0) {
+      LOG_WARN("[%zu/%zu] 재시도 %d/%d: %s",
+               cmd_idx, total_cmds, retry, GPS_CMD_MAX_RETRIES - 1, cmd);
+      vTaskDelay(pdMS_TO_TICKS(GPS_CMD_RETRY_DELAY_MS));
     } else {
-      LOG_ERR("[%d/%d] 실패 (ERROR 또는 TIMEOUT)", i + 1, count);
-      all_ok = false;
+      LOG_INFO("[%zu/%zu] UM982 -> %s", cmd_idx, total_cmds, cmd);
     }
 
-    vTaskDelay(pdMS_TO_TICKS(100));
+    bool result = gps_send_cmd_sync(gps, cmd, GPS_CMD_TIMEOUT_MS);
+
+    if (result) {
+      LOG_INFO("[%zu/%zu] 성공%s", cmd_idx, total_cmds,
+               retry > 0 ? " (재시도 후)" : "");
+      return true;
+    }
   }
 
-  return all_ok;
+  LOG_ERR("[%zu/%zu] 실패 - %d회 재시도 후 포기: %s",
+          cmd_idx, total_cmds, GPS_CMD_MAX_RETRIES, cmd);
+  return false;
+}
+
+/**
+ * @brief UM982 명령어 배열 전송
+ *
+ * @param gps GPS 핸들
+ * @param cmds 명령어 배열
+ * @param count 명령어 수
+ * @param failed_count 실패한 명령어 수 (출력, NULL 가능)
+ * @return true: 전체 성공, false: 하나 이상 실패
+ */
+static bool gps_send_um982_cmds(gps_t *gps, const char **cmds, size_t count,
+                                 size_t *failed_count) {
+  size_t fail_cnt = 0;
+
+  for (size_t i = 0; i < count; i++) {
+    if (!gps_send_cmd_with_retry(gps, cmds[i], i + 1, count)) {
+      fail_cnt++;
+    }
+    vTaskDelay(pdMS_TO_TICKS(GPS_CMD_INTERVAL_MS));
+  }
+
+  if (failed_count) {
+    *failed_count = fail_cnt;
+  }
+
+  return (fail_cnt == 0);
 }
 
 static bool gps_init_um982_base(gps_t *gps) {
   size_t cmd_count = sizeof(um982_base_cmds) / sizeof(um982_base_cmds[0]);
-  LOG_INFO("UM982 Base 초기화 시작 (%d 개 명령)", cmd_count);
+  size_t failed_count = 0;
 
-  bool result = gps_send_um982_cmds(gps, um982_base_cmds, cmd_count);
+  LOG_INFO("UM982 Base 초기화 시작 (%zu 개 명령, 최대 %d회 재시도)",
+           cmd_count, GPS_CMD_MAX_RETRIES);
+
+  bool result = gps_send_um982_cmds(gps, um982_base_cmds, cmd_count, &failed_count);
 
   if (result) {
-    LOG_INFO("UM982 Base 초기화 성공");
+    LOG_INFO("UM982 Base 초기화 성공 (%zu/%zu 명령 완료)", cmd_count, cmd_count);
   } else {
-    LOG_ERR("UM982 Base 초기화 실패 (일부 명령 오류)");
+    LOG_ERR("UM982 Base 초기화 실패 (%zu/%zu 명령 실패)",
+            failed_count, cmd_count);
   }
 
   return result;
@@ -184,14 +233,18 @@ static bool gps_init_um982_base(gps_t *gps) {
 
 static bool gps_init_um982_rover(gps_t *gps) {
   size_t cmd_count = sizeof(um982_rover_cmds) / sizeof(um982_rover_cmds[0]);
-  LOG_INFO("UM982 Rover 초기화 시작 (%d 개 명령)", cmd_count);
+  size_t failed_count = 0;
 
-  bool result = gps_send_um982_cmds(gps, um982_rover_cmds, cmd_count);
+  LOG_INFO("UM982 Rover 초기화 시작 (%zu 개 명령, 최대 %d회 재시도)",
+           cmd_count, GPS_CMD_MAX_RETRIES);
+
+  bool result = gps_send_um982_cmds(gps, um982_rover_cmds, cmd_count, &failed_count);
 
   if (result) {
-    LOG_INFO("UM982 Rover 초기화 성공");
+    LOG_INFO("UM982 Rover 초기화 성공 (%zu/%zu 명령 완료)", cmd_count, cmd_count);
   } else {
-    LOG_ERR("UM982 Rover 초기화 실패 (일부 명령 오류)");
+    LOG_ERR("UM982 Rover 초기화 실패 (%zu/%zu 명령 실패)",
+            failed_count, cmd_count);
   }
 
   return result;
@@ -308,9 +361,9 @@ static bool gps_app_create(gps_id_t id) {
 }
 
 /**
- * @brief 특정 GPS 앱 태스크 삭제
+ * @brief 특정 GPS 앱 태스크 삭제 (내부용)
  */
-static bool gps_app_destroy(gps_id_t id) {
+static bool gps_app_destroy(gps_id_t id, bool cleanup_resources) {
   if (id >= GPS_ID_MAX || !gps_instances[id].enabled) {
     LOG_WARN("GPS[%d] 실행 중이 아님", id);
     return false;
@@ -318,18 +371,36 @@ static bool gps_app_destroy(gps_id_t id) {
 
   LOG_INFO("GPS[%d] 종료 시작", id);
 
-  // GPS 통신 중지
-  gps_port_stop(&gps_instances[id].gps);
+  gps_instance_t *inst = &gps_instances[id];
 
-  // 태스크 삭제 (태스크는 자체 종료하도록 플래그 설정)
-  gps_instances[id].enabled = false;
+  /* 1. 하드웨어 통신 정지 (UART, DMA 등) */
+  gps_port_stop(&inst->gps);
 
-  // 태스크가 자체 종료할 때까지 대기
-  if (gps_instances[id].task) {
-    vTaskDelay(pdMS_TO_TICKS(100));
-    // 태스크는 gps_app_task 내에서 vTaskDelete(NULL) 호출
-    gps_instances[id].task = NULL;
+  /* 2. GPS 앱 태스크 종료 대기 */
+  inst->enabled = false;
+  if (inst->task) {
+    /* 태스크 종료 대기 (최대 500ms) */
+    uint32_t wait_count = 0;
+    while (eTaskGetState(inst->task) != eDeleted && wait_count < 50) {
+      vTaskDelay(pdMS_TO_TICKS(10));
+      wait_count++;
+    }
+
+    /* 태스크가 종료되지 않으면 강제 삭제 */
+    if (eTaskGetState(inst->task) != eDeleted) {
+      LOG_WARN("GPS[%d] 앱 태스크 강제 삭제", id);
+      vTaskDelete(inst->task);
+    }
+    inst->task = NULL;
   }
+
+  /* 3. GPS 코어 리소스 해제 (선택적) */
+  if (cleanup_resources) {
+    gps_deinit(&inst->gps);
+  }
+
+  /* 4. 인스턴스 상태 초기화 */
+  inst->last_fix = GPS_FIX_INVALID;
 
   LOG_INFO("GPS[%d] 종료 완료", id);
   return true;
@@ -369,18 +440,69 @@ void gps_app_start(void) {
 }
 
 /**
- * @brief GPS 앱 종료
+ * @brief GPS 앱 종료 (리소스는 유지)
+ *
+ * 태스크와 통신만 중지하고, OS 리소스(큐, 세마포어)는 유지합니다.
+ * 재시작이 필요한 경우 gps_app_start()를 다시 호출하면 됩니다.
  */
 void gps_app_stop(void) {
   LOG_INFO("GPS 앱 종료");
 
   for (uint8_t i = 0; i < GPS_ID_MAX; i++) {
     if (gps_instances[i].enabled) {
-      gps_app_destroy((gps_id_t)i);
+      gps_app_destroy((gps_id_t)i, false);  /* 리소스 유지 */
     }
   }
 
   LOG_INFO("GPS 앱 종료 완료");
+}
+
+/*===========================================================================
+ * GPS 리소스 정리 (Cleanup)
+ *===========================================================================*/
+
+/**
+ * @brief 특정 GPS 인스턴스 완전 정리
+ *
+ * 태스크 종료, 통신 정지, OS 리소스(큐, 세마포어, 뮤텍스) 모두 해제합니다.
+ * 더 이상 해당 GPS를 사용하지 않을 때 호출합니다.
+ *
+ * @param id GPS ID
+ * @return true: 성공, false: 실패 (이미 정지됨 등)
+ */
+bool gps_cleanup_instance(gps_id_t id) {
+  if (id >= GPS_ID_MAX) {
+    LOG_ERR("GPS[%d] 잘못된 ID", id);
+    return false;
+  }
+
+  LOG_INFO("GPS[%d] 리소스 완전 정리 시작", id);
+
+  if (gps_instances[id].enabled) {
+    gps_app_destroy(id, true);  /* 리소스도 해제 */
+  } else {
+    /* 이미 정지됨 - OS 리소스만 정리 */
+    gps_deinit(&gps_instances[id].gps);
+  }
+
+  LOG_INFO("GPS[%d] 리소스 완전 정리 완료", id);
+  return true;
+}
+
+/**
+ * @brief 모든 GPS 인스턴스 완전 정리
+ *
+ * 모든 GPS 태스크 종료, 통신 정지, OS 리소스 해제합니다.
+ * 시스템 종료 또는 GPS 기능 완전 비활성화 시 호출합니다.
+ */
+void gps_cleanup_all(void) {
+  LOG_INFO("모든 GPS 리소스 정리 시작");
+
+  for (uint8_t i = 0; i < GPS_ID_MAX; i++) {
+    gps_cleanup_instance((gps_id_t)i);
+  }
+
+  LOG_INFO("모든 GPS 리소스 정리 완료");
 }
 
 /*===========================================================================

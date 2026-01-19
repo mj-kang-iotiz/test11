@@ -340,21 +340,92 @@ void gps_port_start(gps_t *gps_handle)
 }
 
 /**
+ * @brief GPS UART2 통신 정지 (DMA 포함)
+ */
+static void gps_uart2_comm_stop(void)
+{
+  /* 1. DMA 인터럽트 비활성화 */
+  LL_DMA_DisableIT_HT(DMA1, LL_DMA_STREAM_5);
+  LL_DMA_DisableIT_TC(DMA1, LL_DMA_STREAM_5);
+  LL_DMA_DisableIT_TE(DMA1, LL_DMA_STREAM_5);
+  LL_DMA_DisableIT_FE(DMA1, LL_DMA_STREAM_5);
+  LL_DMA_DisableIT_DME(DMA1, LL_DMA_STREAM_5);
+
+  /* 2. USART 인터럽트 비활성화 */
+  LL_USART_DisableIT_IDLE(USART2);
+  LL_USART_DisableIT_PE(USART2);
+  LL_USART_DisableIT_ERROR(USART2);
+
+  /* 3. DMA RX 요청 비활성화 */
+  LL_USART_DisableDMAReq_RX(USART2);
+
+  /* 4. DMA 스트림 비활성화 */
+  LL_DMA_DisableStream(DMA1, LL_DMA_STREAM_5);
+
+  /* 스트림이 완전히 비활성화될 때까지 대기 */
+  while (LL_DMA_IsEnabledStream(DMA1, LL_DMA_STREAM_5)) {
+    /* busy wait */
+  }
+
+  /* 5. USART 비활성화 */
+  LL_USART_Disable(USART2);
+
+  /* 6. DMA 위치 초기화 */
+  gps_dma_old_pos = 0;
+
+  LOG_INFO("GPS UART2 통신 정지 완료");
+}
+
+/**
+ * @brief GPS 전원 OFF (GPIO 리셋)
+ */
+static void gps_rtk_gpio_stop(void)
+{
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_RESET);  /* RTK Reset pin LOW */
+  LOG_INFO("GPS RTK 전원 OFF");
+}
+
+/**
+ * @brief GPS 하드웨어 정지 (통신 + 전원)
+ */
+static int gps_rtk_stop(void)
+{
+  gps_uart2_comm_stop();
+  gps_rtk_gpio_stop();
+  return 0;
+}
+
+/**
  * @brief GPS 통신 정지
+ *
+ * HAL ops에 stop 함수가 등록되어 있으면 호출하고,
+ * 없으면 기본 정지 로직(gps_rtk_stop)을 실행합니다.
  */
 void gps_port_stop(gps_t *gps_handle)
 {
-  if (!gps_handle || !gps_handle->ops || !gps_handle->ops->stop)
-  {
-    LOG_ERR("GPS stop failed: invalid handle or ops");
+  if (!gps_handle) {
+    LOG_ERR("GPS stop failed: invalid handle");
     return;
   }
 
-  gps_handle->ops->stop();
+  /* ops->stop이 있으면 사용, 없으면 기본 정지 로직 */
+  if (gps_handle->ops && gps_handle->ops->stop) {
+    gps_handle->ops->stop();
+  } else {
+    gps_rtk_stop();
+  }
+
+  /* 글로벌 인스턴스 정리 */
+  g_gps_instance = NULL;
 }
 
-void gps_port_cleanup()
+/**
+ * @brief GPS 포트 리소스 정리
+ */
+void gps_port_cleanup(void)
 {
-
-
+  /* 통신이 아직 활성화되어 있으면 정지 */
+  if (g_gps_instance) {
+    gps_port_stop(g_gps_instance);
+  }
 }

@@ -88,6 +88,56 @@ bool gps_init(gps_t *gps) {
 }
 
 /*===========================================================================
+ * GPS 리소스 해제
+ *===========================================================================*/
+
+void gps_deinit(gps_t *gps) {
+    if (!gps) {
+        LOG_ERR("GPS handle is NULL");
+        return;
+    }
+
+    LOG_INFO("GPS deinit start");
+
+    /* 1. 프로세스 태스크 종료 */
+    if (gps->is_running) {
+        gps_stop(gps);
+    }
+
+    /* 2. OS 객체 삭제 */
+    if (gps->pkt_queue) {
+        vQueueDelete(gps->pkt_queue);
+        gps->pkt_queue = NULL;
+    }
+
+    if (gps->mutex) {
+        vSemaphoreDelete(gps->mutex);
+        gps->mutex = NULL;
+    }
+
+    if (gps->cmd_sem) {
+        vSemaphoreDelete(gps->cmd_sem);
+        gps->cmd_sem = NULL;
+    }
+
+    if (gps->rtcm_data.mutex) {
+        vSemaphoreDelete(gps->rtcm_data.mutex);
+        gps->rtcm_data.mutex = NULL;
+    }
+
+    /* 3. 태스크 핸들 초기화 */
+    gps->pkt_task = NULL;
+
+    /* 4. 상태 초기화 */
+    gps->is_alive = false;
+    gps->is_running = false;
+    gps->handler = NULL;
+    gps->ops = NULL;
+
+    LOG_INFO("GPS deinit complete");
+}
+
+/*===========================================================================
  * 이벤트 핸들러 설정
  *===========================================================================*/
 
@@ -105,6 +155,37 @@ void gps_set_evt_handler(gps_t *gps, gps_evt_handler handler) {
  * - mutex로 한 번에 하나씩만 송신하도록 보호
  * - RX Task는 mutex 사용 안함 (데드락 방지)
  *===========================================================================*/
+
+/**
+ * @brief GPS 종료 요청
+ *
+ * 프로세스 태스크를 안전하게 종료시킵니다.
+ * 종료 신호를 큐에 보내 portMAX_DELAY 대기를 깨웁니다.
+ */
+void gps_stop(gps_t *gps) {
+    if (!gps) {
+        return;
+    }
+
+    gps->is_running = false;
+
+    /* 큐에 더미 데이터를 보내 portMAX_DELAY 대기를 깨움 */
+    if (gps->pkt_queue) {
+        uint8_t dummy = 0xFF;  /* 종료 신호 */
+        xQueueSend(gps->pkt_queue, &dummy, 0);
+    }
+
+    /* 태스크가 종료될 때까지 대기 (최대 500ms) */
+    uint32_t wait_count = 0;
+    while (gps->is_alive && wait_count < 50) {
+        vTaskDelay(pdMS_TO_TICKS(10));
+        wait_count++;
+    }
+
+    if (gps->is_alive) {
+        LOG_WARN("GPS process task did not stop gracefully");
+    }
+}
 
 bool gps_send_cmd_sync(gps_t *gps, const char *cmd, uint32_t timeout_ms) {
     if (!gps || !cmd || !gps->ops || !gps->ops->send) {
