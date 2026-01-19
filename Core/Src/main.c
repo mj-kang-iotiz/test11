@@ -46,6 +46,11 @@
 #include "event_bus.h"
 #include "gps_role.h"
 #include "base_auto_fix.h"
+
+#ifndef TAG
+#define TAG "MAIN"
+#endif
+#include "log.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -109,10 +114,18 @@ void initThread(void *pvParameter) {
 	event_bus_init();
 	gps_app_start();
 
-	/* Base 모드 + Auto 모드일 때 base_auto_fix 초기화 */
-	if (gps_role_is_base() && !params->use_manual_position) {
-		base_auto_fix_init(0);
-		base_auto_fix_start();
+	/* Base 모드 + Auto-Fix 활성화일 때 초기화 */
+	if (gps_role_is_base() && params->base_auto_fix_enabled) {
+		LOG_INFO("Base Auto-Fix 모드 활성화");
+		if (base_auto_fix_init(0)) {
+			if (base_auto_fix_start()) {
+				LOG_INFO("Base Auto-Fix 시작 성공");
+			} else {
+				LOG_ERR("Base Auto-Fix 시작 실패");
+			}
+		} else {
+			LOG_ERR("Base Auto-Fix 초기화 실패");
+		}
 		// gsm_task_create(NULL);  // NTRIP 시작 - 필요시 주석 해제
 	}
 
