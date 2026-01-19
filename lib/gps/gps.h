@@ -176,6 +176,25 @@ typedef struct gps_s {
 bool gps_init(gps_t *gps);
 
 /**
+ * @brief GPS 리소스 해제
+ *
+ * 프로세스 태스크를 종료하고 모든 OS 객체(큐, 세마포어, 뮤텍스)를 해제합니다.
+ *
+ * @param gps GPS 핸들
+ */
+void gps_deinit(gps_t *gps);
+
+/**
+ * @brief GPS 종료 요청
+ *
+ * 프로세스 태스크를 안전하게 종료시킵니다.
+ * 종료 신호를 큐에 보내 portMAX_DELAY 대기를 깨웁니다.
+ *
+ * @param gps GPS 핸들
+ */
+void gps_stop(gps_t *gps);
+
+/**
  * @brief GPS 이벤트 핸들러 설정
  * @param gps GPS 핸들
  * @param handler 이벤트 핸들러

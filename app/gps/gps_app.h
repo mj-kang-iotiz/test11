@@ -100,8 +100,13 @@ bool gps_format_position_data(char *buffer);
 bool gps_config_heading_length_async(gps_id_t id, float baseline_len, float slave_distance,
                                      gps_command_callback_t callback, void *user_data);
 
- void gps_set_heading_length();      
- bool gps_cleanup_instance(gps_id_t id);
-void gps_cleanup_all(void);                              
+void gps_set_heading_length();
+
+/**
+ * @brief GPS 앱 완전 해제
+ *
+ * 태스크 종료, 통신 정지, OS 리소스(큐, 세마포어, 뮤텍스) 모두 해제합니다.
+ */
+void gps_app_deinit(void);
 
 #endif

@@ -65,12 +65,16 @@
   bool base_auto_fix_start(void);
 
   /**
-
    * @brief Base Auto-Fix 모드 중지
-
    */
-
   void base_auto_fix_stop(void);
+
+  /**
+   * @brief Base Auto-Fix 모듈 해제
+   *
+   * 모든 리소스(타이머, 큐, 태스크)를 해제합니다.
+   */
+  void base_auto_fix_deinit(void);
 
   /**
 
