@@ -181,15 +181,13 @@ parse_result_t nmea_try_parse(gps_t *gps, ringbuffer_t *rb) {
 
         /* 메시지 타입별로 적절한 이벤트 생성 */
         if (msg_id == GPS_NMEA_MSG_GGA) {
-            /* 위치 업데이트 이벤트 */
-            event.type = GPS_EVENT_POSITION_UPDATED;
-            event.data.position.latitude = gps->nmea_data.gga.lat;
-            event.data.position.longitude = gps->nmea_data.gga.lon;
-            event.data.position.altitude = gps->nmea_data.gga.alt;
-            event.data.position.fix_type = gps->nmea_data.gga.fix;
-            event.data.position.sat_count = gps->nmea_data.gga.sat_num;
-            event.data.position.hdop = gps->nmea_data.gga.hdop;
-            gps->handler(gps, &event);
+            /* Fix 상태가 변경된 경우에만 이벤트 발생 */
+            if (gps->data.status.fix_changed) {
+                event.type = GPS_EVENT_FIX_UPDATED;
+                event.data.fix.fix_type = gps->data.status.fix_type;
+                event.data.fix.hdop = gps->data.status.hdop;
+                gps->handler(gps, &event);
+            }
         } else if (msg_id == GPS_NMEA_MSG_THS) {
             /* 헤딩 업데이트 이벤트 */
             event.type = GPS_EVENT_HEADING_UPDATED;
@@ -361,6 +359,21 @@ static void nmea_parse_gga(gps_t *gps, const char *buf, size_t len) {
     /* Field 11: Geoid separation */
     field = get_field(buf, len, 11);
     gps->nmea_data.gga.geo_sep = parse_field_double(field);
+
+    /* === 공용 데이터 업데이트 (fix_type, hdop만) === */
+    gps_fix_t new_fix = gps->nmea_data.gga.fix;
+
+    /* fix_type이 변경된 경우에만 업데이트 */
+    if (gps->data.status.fix_type != new_fix) {
+        gps->data.status.fix_type = new_fix;
+        gps->data.status.fix_changed = true;
+        gps->data.status.fix_timestamp_ms = xTaskGetTickCount();
+    } else {
+        gps->data.status.fix_changed = false;
+    }
+
+    /* hdop은 항상 업데이트 */
+    gps->data.status.hdop = gps->nmea_data.gga.hdop;
 }
 
 /*===========================================================================
@@ -386,5 +399,10 @@ static void nmea_parse_ths(gps_t *gps, const char *buf, size_t len) {
     /* Field 2: Mode */
     field = get_field(buf, len, 2);
     gps->nmea_data.ths.mode = (gps_ths_mode_t)parse_field_char(field);
+
+    /* === 공용 데이터 업데이트 === */
+    gps->data.heading.heading = gps->nmea_data.ths.heading;
+    gps->data.heading.mode = (uint8_t)gps->nmea_data.ths.mode;
+    gps->data.heading.timestamp_ms = xTaskGetTickCount();
 }
 

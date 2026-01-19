@@ -28,6 +28,50 @@
 typedef void (*gps_evt_handler)(gps_t *gps, const gps_event_t *event);
 
 /*===========================================================================
+ * 공용 GPS 데이터 구조체
+ * 여러 소스(GGA, BESTNAV, THS 등)에서 업데이트되는 통합 데이터
+ *===========================================================================*/
+typedef struct {
+    /* === 위치 (BESTNAV가 업데이트) === */
+    struct {
+        double latitude;            /**< 위도 (degree) */
+        double longitude;           /**< 경도 (degree) */
+        double altitude;            /**< 고도 (meter) */
+        float lat_std;              /**< 위도 표준편차 (meter) */
+        float lon_std;              /**< 경도 표준편차 (meter) */
+        float alt_std;              /**< 고도 표준편차 (meter) */
+        uint32_t timestamp_ms;      /**< 업데이트 시각 */
+    } position;
+
+    /* === 속도 (BESTNAV가 업데이트) === */
+    struct {
+        double hor_speed;           /**< 수평 속도 (m/s) */
+        double ver_speed;           /**< 수직 속도 (m/s) */
+        double track;               /**< 진행 방향 (degree, 0-360) */
+        uint32_t timestamp_ms;      /**< 업데이트 시각 */
+    } velocity;
+
+    /* === 헤딩 (THS가 업데이트) === */
+    struct {
+        double heading;             /**< 헤딩 (degree, 0-360) */
+        uint8_t mode;               /**< 헤딩 모드 (gps_ths_mode_t) */
+        uint32_t timestamp_ms;      /**< 업데이트 시각 */
+    } heading;
+
+    /* === 상태 정보 === */
+    struct {
+        gps_fix_t fix_type;         /**< Fix 타입 (GGA가 업데이트) */
+        uint8_t sat_count;          /**< 위성 수 (BESTNAV.sv가 업데이트) */
+        uint8_t used_sat_count;     /**< 사용 위성 수 (BESTNAV.used_sv) */
+        float hdop;                 /**< HDOP (GGA가 업데이트) */
+        uint32_t fix_timestamp_ms;  /**< Fix 업데이트 시각 */
+        uint32_t sat_timestamp_ms;  /**< 위성수 업데이트 시각 */
+        bool fix_changed;           /**< Fix 상태 변경됨 (이벤트 발생용) */
+    } status;
+
+} gps_common_data_t;
+
+/*===========================================================================
  * RTCM 데이터 저장 구조체 (LoRa 전송용)
  *===========================================================================*/
 typedef struct {
@@ -101,10 +145,13 @@ typedef struct gps_s {
     /*--- 파서 ---*/
     gps_parser_ctx_t parser_ctx;    /**< 파서 컨텍스트 */
 
-    /*--- 파싱된 데이터 ---*/
+    /*--- 파싱된 데이터 (프로토콜별 원본) ---*/
     gps_nmea_data_t nmea_data;      /**< NMEA 파싱 데이터 (GGA, THS 등) */
     gps_unicore_bin_data_t unicore_bin_data; /**< Unicore Binary 데이터 */
     gps_rtcm_data_t rtcm_data;      /**< RTCM 데이터 (LoRa 전송용) */
+
+    /*--- 공용 데이터 (통합) ---*/
+    gps_common_data_t data;         /**< 통합 GPS 데이터 (BESTNAV→위치, GGA→fix, THS→헤딩) */
 
     /*--- 명령어 처리 ---*/
     SemaphoreHandle_t cmd_sem;      /**< 명령어 응답 대기 세마포어 */

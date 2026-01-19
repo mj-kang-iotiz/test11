@@ -333,20 +333,20 @@ parse_result_t unicore_bin_try_parse(gps_t *gps, ringbuffer_t *rb) {
 
         /* 메시지 타입별로 적절한 이벤트 생성 */
         if (msg_id == GPS_UNICORE_BIN_MSG_BESTNAV) {
-            /* 위치 + 속도 업데이트 이벤트 */
+            /* 위치 업데이트 이벤트 (공용 데이터 기준) */
             event.type = GPS_EVENT_POSITION_UPDATED;
-            event.data.position.latitude = gps->unicore_bin_data.position.latitude;
-            event.data.position.longitude = gps->unicore_bin_data.position.longitude;
-            event.data.position.altitude = gps->unicore_bin_data.position.altitude;
-            event.data.position.fix_type = gps->unicore_bin_data.position.pos_type;
-            event.data.position.sat_count = 0;  /* BESTNAV에는 위성 수 없음 */
-            event.data.position.hdop = 0.0;
+            event.data.position.latitude = gps->data.position.latitude;
+            event.data.position.longitude = gps->data.position.longitude;
+            event.data.position.altitude = gps->data.position.altitude;
+            event.data.position.fix_type = gps->data.status.fix_type;  /* GGA에서 업데이트 */
+            event.data.position.sat_count = gps->data.status.sat_count;  /* BESTNAV.sv */
+            event.data.position.hdop = gps->data.status.hdop;  /* GGA에서 업데이트 */
             gps->handler(gps, &event);
 
-            /* 속도 이벤트도 발생 */
+            /* 속도 업데이트 이벤트 */
             event.type = GPS_EVENT_VELOCITY_UPDATED;
-            event.data.velocity.speed = gps->unicore_bin_data.velocity.hor_speed;
-            event.data.velocity.track = gps->unicore_bin_data.velocity.trk_gnd;
+            event.data.velocity.speed = gps->data.velocity.hor_speed;
+            event.data.velocity.track = gps->data.velocity.track;
             event.data.velocity.mode = 0;
             gps->handler(gps, &event);
         }
@@ -410,7 +410,9 @@ static void unicore_bin_parse_bestnav(gps_t *gps, const uint8_t *payload, size_t
     hpd_unicore_bestnavb_t nav;
     memcpy(&nav, payload, sizeof(hpd_unicore_bestnavb_t));
 
-    /* 공용 위치 필드 업데이트 */
+    uint32_t now = xTaskGetTickCount();
+
+    /* === 프로토콜별 원본 데이터 업데이트 (unicore_bin_data) === */
     gps->unicore_bin_data.position.valid = true;
     gps->unicore_bin_data.position.latitude = nav.lat;
     gps->unicore_bin_data.position.longitude = nav.lon;
@@ -421,12 +423,32 @@ static void unicore_bin_parse_bestnav(gps_t *gps, const uint8_t *payload, size_t
     gps->unicore_bin_data.position.alt_std = nav.height_dev;
     gps->unicore_bin_data.position.source_msg = 2118;  /* BESTNAV */
 
-    /* 공용 속도 필드 업데이트 */
     gps->unicore_bin_data.velocity.valid = true;
     gps->unicore_bin_data.velocity.hor_speed = nav.hor_speed;
     gps->unicore_bin_data.velocity.trk_gnd = nav.trk_gnd;
     gps->unicore_bin_data.velocity.ver_speed = nav.vert_speed;
     gps->unicore_bin_data.velocity.source_msg = 2118;  /* BESTNAV */
+
+    /* === 공용 데이터 업데이트 (gps->data) === */
+    /* 위치 */
+    gps->data.position.latitude = nav.lat;
+    gps->data.position.longitude = nav.lon;
+    gps->data.position.altitude = nav.height;
+    gps->data.position.lat_std = nav.lat_dev;
+    gps->data.position.lon_std = nav.lon_dev;
+    gps->data.position.alt_std = nav.height_dev;
+    gps->data.position.timestamp_ms = now;
+
+    /* 속도 */
+    gps->data.velocity.hor_speed = nav.hor_speed;
+    gps->data.velocity.ver_speed = nav.vert_speed;
+    gps->data.velocity.track = nav.trk_gnd;
+    gps->data.velocity.timestamp_ms = now;
+
+    /* 위성수 */
+    gps->data.status.sat_count = nav.sv;
+    gps->data.status.used_sat_count = nav.used_sv;
+    gps->data.status.sat_timestamp_ms = now;
 }
 
 /*===========================================================================
