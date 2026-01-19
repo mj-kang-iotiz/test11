@@ -43,6 +43,7 @@
 #include "softuart.h"
 #include "rs485_app.h"
 #include "board_config.h"
+#include "event_bus.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -103,6 +104,7 @@ void initThread(void *pvParameter) {
   user_params_t* params = flash_params_get_current();
   dwt_init();
 	flash_params_init();
+	event_bus_init();
 	gps_app_start();
   //  flash_params_set_manual_position(true, "37.2901527", "127.033646955", "100.918");
 

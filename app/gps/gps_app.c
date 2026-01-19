@@ -334,9 +334,6 @@ void gps_app_start(void) {
     return;
   }
 
-  /* 이벤트 버스 초기화 (최초 1회) */
-  event_bus_init();
-
   LOG_INFO("GPS 앱 시작");
 
   /* 역할 감지 */
