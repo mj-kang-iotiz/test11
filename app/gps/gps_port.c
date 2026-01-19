@@ -340,37 +340,18 @@ void gps_port_start(gps_t *gps_handle)
 }
 
 /**
- * @brief GPS UART2 통신 정지 (DMA 포함)
+ * @brief GPS UART2 통신 정지
+ *
+ * UART 페리페럴을 리셋하여 모든 통신을 정지합니다.
+ * 클럭 리셋으로 UART 레지스터가 초기화되고 DMA 요청도 비활성화됩니다.
  */
 static void gps_uart2_comm_stop(void)
 {
-  /* 1. DMA 인터럽트 비활성화 */
-  LL_DMA_DisableIT_HT(DMA1, LL_DMA_STREAM_5);
-  LL_DMA_DisableIT_TC(DMA1, LL_DMA_STREAM_5);
-  LL_DMA_DisableIT_TE(DMA1, LL_DMA_STREAM_5);
-  LL_DMA_DisableIT_FE(DMA1, LL_DMA_STREAM_5);
-  LL_DMA_DisableIT_DME(DMA1, LL_DMA_STREAM_5);
+  /* UART2 페리페럴 리셋 */
+  __HAL_RCC_USART2_FORCE_RESET();
+  __HAL_RCC_USART2_RELEASE_RESET();
 
-  /* 2. USART 인터럽트 비활성화 */
-  LL_USART_DisableIT_IDLE(USART2);
-  LL_USART_DisableIT_PE(USART2);
-  LL_USART_DisableIT_ERROR(USART2);
-
-  /* 3. DMA RX 요청 비활성화 */
-  LL_USART_DisableDMAReq_RX(USART2);
-
-  /* 4. DMA 스트림 비활성화 */
-  LL_DMA_DisableStream(DMA1, LL_DMA_STREAM_5);
-
-  /* 스트림이 완전히 비활성화될 때까지 대기 */
-  while (LL_DMA_IsEnabledStream(DMA1, LL_DMA_STREAM_5)) {
-    /* busy wait */
-  }
-
-  /* 5. USART 비활성화 */
-  LL_USART_Disable(USART2);
-
-  /* 6. DMA 위치 초기화 */
+  /* DMA 위치 초기화 */
   gps_dma_old_pos = 0;
 
   LOG_INFO("GPS UART2 통신 정지 완료");
