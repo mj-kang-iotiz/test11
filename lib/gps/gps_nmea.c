@@ -361,13 +361,19 @@ static void nmea_parse_gga(gps_t *gps, const char *buf, size_t len) {
     gps->nmea_data.gga.geo_sep = parse_field_double(field);
 
     /* === 공용 데이터 업데이트 (fix_type, hdop만) === */
-    /* 이전값과 비교하여 변경 여부 판단 */
-    gps_fix_t prev_fix = gps->data.status.fix_type;
-    gps->data.status.fix_changed = (prev_fix != gps->nmea_data.gga.fix);
+    gps_fix_t new_fix = gps->nmea_data.gga.fix;
 
-    gps->data.status.fix_type = gps->nmea_data.gga.fix;
+    /* fix_type이 변경된 경우에만 업데이트 */
+    if (gps->data.status.fix_type != new_fix) {
+        gps->data.status.fix_type = new_fix;
+        gps->data.status.fix_changed = true;
+        gps->data.status.fix_timestamp_ms = xTaskGetTickCount();
+    } else {
+        gps->data.status.fix_changed = false;
+    }
+
+    /* hdop은 항상 업데이트 */
     gps->data.status.hdop = gps->nmea_data.gga.hdop;
-    gps->data.status.fix_timestamp_ms = xTaskGetTickCount();
 }
 
 /*===========================================================================
