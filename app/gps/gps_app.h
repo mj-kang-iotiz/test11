@@ -103,15 +103,10 @@ bool gps_config_heading_length_async(gps_id_t id, float baseline_len, float slav
 void gps_set_heading_length();
 
 /**
- * @brief 특정 GPS 앱 완전 해제
- * @param id GPS ID
- * @return true: 성공, false: 실패
+ * @brief GPS 앱 완전 해제
+ *
+ * 태스크 종료, 통신 정지, OS 리소스(큐, 세마포어, 뮤텍스) 모두 해제합니다.
  */
-bool gps_app_deinit(gps_id_t id);
-
-/**
- * @brief 모든 GPS 앱 완전 해제
- */
-void gps_app_deinit_all(void);                              
+void gps_app_deinit(void);
 
 #endif
