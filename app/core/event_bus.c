@@ -1,5 +1,6 @@
 #include "event_bus.h"
 #include "FreeRTOS.h"
+#include "task.h"
 #include "queue.h"
 #include "semphr.h"
 #include <string.h>
@@ -9,6 +10,13 @@
 #endif
 
 #include "log.h"
+
+/*===========================================================================
+ * Configuration
+ *===========================================================================*/
+#define EVENT_QUEUE_SIZE        16
+#define DISPATCHER_STACK_SIZE   512
+#define DISPATCHER_PRIORITY     (tskIDLE_PRIORITY + 3)
 
 /*===========================================================================
  * Internal Types
@@ -27,9 +35,14 @@ static subscriber_t subscribers[EVENT_BUS_MAX_SUBSCRIBERS];
 static uint8_t subscriber_count = 0;
 static SemaphoreHandle_t bus_mutex = NULL;
 
-/* ISR deferred event queue */
-#define EVENT_QUEUE_SIZE 10
-static QueueHandle_t deferred_queue = NULL;
+/* Async event queue and dispatcher task */
+static QueueHandle_t event_queue = NULL;
+static TaskHandle_t dispatcher_task = NULL;
+
+/*===========================================================================
+ * Forward Declarations
+ *===========================================================================*/
+static void event_bus_dispatcher_task(void *param);
 
 /*===========================================================================
  * Implementation
@@ -39,21 +52,39 @@ void event_bus_init(void) {
     memset(subscribers, 0, sizeof(subscribers));
     subscriber_count = 0;
 
+    /* Create mutex for subscriber list protection */
     if (bus_mutex == NULL) {
         bus_mutex = xSemaphoreCreateMutex();
         if (bus_mutex == NULL) {
             LOG_ERR("Failed to create mutex");
+            return;
         }
     }
 
-    if (deferred_queue == NULL) {
-        deferred_queue = xQueueCreate(EVENT_QUEUE_SIZE, sizeof(event_t));
-        if (deferred_queue == NULL) {
-            LOG_ERR("Failed to create deferred queue");
+    /* Create event queue */
+    if (event_queue == NULL) {
+        event_queue = xQueueCreate(EVENT_QUEUE_SIZE, sizeof(event_t));
+        if (event_queue == NULL) {
+            LOG_ERR("Failed to create event queue");
+            return;
         }
     }
 
-    LOG_INFO("Event bus initialized");
+    /* Create dispatcher task */
+    if (dispatcher_task == NULL) {
+        BaseType_t ret = xTaskCreate(event_bus_dispatcher_task,
+                                      "evt_bus",
+                                      DISPATCHER_STACK_SIZE,
+                                      NULL,
+                                      DISPATCHER_PRIORITY,
+                                      &dispatcher_task);
+        if (ret != pdPASS) {
+            LOG_ERR("Failed to create dispatcher task");
+            return;
+        }
+    }
+
+    LOG_INFO("Event bus initialized (async mode)");
 }
 
 bool event_bus_subscribe(event_type_t type, event_handler_t handler, void *user_data) {
@@ -132,54 +163,59 @@ void event_bus_unsubscribe(event_type_t type, event_handler_t handler) {
 }
 
 void event_bus_publish(const event_t *event) {
-    if (event == NULL) {
+    if (event == NULL || event_queue == NULL) {
         return;
     }
 
-    if (bus_mutex != NULL) {
-        xSemaphoreTake(bus_mutex, portMAX_DELAY);
+    /* Non-blocking: just enqueue and return immediately */
+    if (xQueueSend(event_queue, event, pdMS_TO_TICKS(10)) != pdTRUE) {
+        LOG_WARN("Event queue full, event 0x%04X dropped", event->type);
     }
+}
 
-    for (uint8_t i = 0; i < subscriber_count; i++) {
-        if (subscribers[i].active && subscribers[i].type == event->type) {
-            /* Release mutex before calling handler to prevent deadlock */
-            if (bus_mutex != NULL) {
-                xSemaphoreGive(bus_mutex);
-            }
+/**
+ * @brief Dispatcher task - dequeues events and calls handlers
+ *
+ * Runs in its own task context, so handlers don't block publishers.
+ */
+static void event_bus_dispatcher_task(void *param) {
+    (void)param;
+    event_t event;
 
-            subscribers[i].handler(event, subscribers[i].user_data);
+    LOG_INFO("Event bus dispatcher started");
 
+    while (1) {
+        /* Block until event available */
+        if (xQueueReceive(event_queue, &event, portMAX_DELAY) == pdTRUE) {
+
+            /* Take mutex to safely iterate subscribers */
             if (bus_mutex != NULL) {
                 xSemaphoreTake(bus_mutex, portMAX_DELAY);
             }
+
+            /* Call all matching handlers */
+            for (uint8_t i = 0; i < subscriber_count; i++) {
+                if (subscribers[i].active && subscribers[i].type == event.type) {
+                    event_handler_t handler = subscribers[i].handler;
+                    void *user_data = subscribers[i].user_data;
+
+                    /* Release mutex before calling handler */
+                    if (bus_mutex != NULL) {
+                        xSemaphoreGive(bus_mutex);
+                    }
+
+                    handler(&event, user_data);
+
+                    /* Re-acquire mutex for next iteration */
+                    if (bus_mutex != NULL) {
+                        xSemaphoreTake(bus_mutex, portMAX_DELAY);
+                    }
+                }
+            }
+
+            if (bus_mutex != NULL) {
+                xSemaphoreGive(bus_mutex);
+            }
         }
-    }
-
-    if (bus_mutex != NULL) {
-        xSemaphoreGive(bus_mutex);
-    }
-}
-
-bool event_bus_publish_from_isr(const event_t *event) {
-    if (event == NULL || deferred_queue == NULL) {
-        return false;
-    }
-
-    BaseType_t higher_priority_woken = pdFALSE;
-    BaseType_t result = xQueueSendFromISR(deferred_queue, event, &higher_priority_woken);
-
-    portYIELD_FROM_ISR(higher_priority_woken);
-
-    return (result == pdTRUE);
-}
-
-void event_bus_process(void) {
-    if (deferred_queue == NULL) {
-        return;
-    }
-
-    event_t event;
-    while (xQueueReceive(deferred_queue, &event, 0) == pdTRUE) {
-        event_bus_publish(&event);
     }
 }
