@@ -100,8 +100,18 @@ bool gps_format_position_data(char *buffer);
 bool gps_config_heading_length_async(gps_id_t id, float baseline_len, float slave_distance,
                                      gps_command_callback_t callback, void *user_data);
 
- void gps_set_heading_length();      
- bool gps_cleanup_instance(gps_id_t id);
-void gps_cleanup_all(void);                              
+void gps_set_heading_length();
+
+/**
+ * @brief 특정 GPS 앱 완전 해제
+ * @param id GPS ID
+ * @return true: 성공, false: 실패
+ */
+bool gps_app_deinit(gps_id_t id);
+
+/**
+ * @brief 모든 GPS 앱 완전 해제
+ */
+void gps_app_deinit_all(void);                              
 
 #endif

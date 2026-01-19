@@ -27,9 +27,9 @@ typedef struct {
   gps_id_t id;
   bool enabled;
   gps_fix_t last_fix;
-} gps_instance_t;
+} gps_app_t;
 
-static gps_instance_t gps_instances[GPS_ID_MAX] = {0};
+static gps_app_t gps_apps[GPS_ID_MAX] = {0};
 
 /*===========================================================================
  * UM982 초기화 명령어
@@ -94,8 +94,8 @@ static void gps_app_evt_handler(gps_t *gps, const gps_event_t *event) {
 
   // 해당 GPS 인스턴스 찾기
   for (uint8_t i = 0; i < GPS_CNT; i++) {
-    if (gps_instances[i].enabled && &gps_instances[i].gps == gps) {
-      inst = &gps_instances[i];
+    if (gps_apps[i].enabled && &gps_apps[i].gps == gps) {
+      inst = &gps_apps[i];
       break;
     }
   }
@@ -256,7 +256,7 @@ static bool gps_init_um982_rover(gps_t *gps) {
 
 static void gps_app_task(void *pvParameter) {
   gps_id_t id = (gps_id_t)(uintptr_t)pvParameter;
-  gps_instance_t *inst = &gps_instances[id];
+  gps_instance_t *inst = &gps_apps[id];
   const board_config_t *config = board_get_config();
 
   LOG_INFO("GPS 앱 태스크[%d] 시작", id);
@@ -324,7 +324,7 @@ static bool gps_app_create(gps_id_t id) {
     return false;
   }
 
-  if (gps_instances[id].enabled) {
+  if (gps_apps[id].enabled) {
     LOG_WARN("GPS[%d] 이미 실행 중", id);
     return false;
   }
@@ -333,10 +333,10 @@ static bool gps_app_create(gps_id_t id) {
   LOG_INFO("GPS[%d] 생성 시작 (타입: %s)", id,
            type == GPS_TYPE_UM982 ? "UM982" : "UNKNOWN");
 
-  gps_instances[id].type = type;
-  gps_instances[id].id = id;
-  gps_instances[id].enabled = true;
-  gps_instances[id].last_fix = GPS_FIX_INVALID;
+  gps_apps[id].type = type;
+  gps_apps[id].id = id;
+  gps_apps[id].enabled = true;
+  gps_apps[id].last_fix = GPS_FIX_INVALID;
 
   char task_name[16];
   snprintf(task_name, sizeof(task_name), "gps_app_%d", id);
@@ -347,12 +347,12 @@ static bool gps_app_create(gps_id_t id) {
       2048,
       (void *)(uintptr_t)id,
       tskIDLE_PRIORITY + 2,
-      &gps_instances[id].task
+      &gps_apps[id].task
   );
 
   if (ret != pdPASS) {
     LOG_ERR("GPS[%d] 태스크 생성 실패", id);
-    gps_instances[id].enabled = false;
+    gps_apps[id].enabled = false;
     return false;
   }
 
@@ -364,14 +364,14 @@ static bool gps_app_create(gps_id_t id) {
  * @brief 특정 GPS 앱 태스크 삭제 (내부용)
  */
 static bool gps_app_destroy(gps_id_t id, bool cleanup_resources) {
-  if (id >= GPS_ID_MAX || !gps_instances[id].enabled) {
+  if (id >= GPS_ID_MAX || !gps_apps[id].enabled) {
     LOG_WARN("GPS[%d] 실행 중이 아님", id);
     return false;
   }
 
   LOG_INFO("GPS[%d] 종료 시작", id);
 
-  gps_instance_t *inst = &gps_instances[id];
+  gps_instance_t *inst = &gps_apps[id];
 
   /* 1. 하드웨어 통신 정지 (UART, DMA 등) */
   gps_port_stop(&inst->gps);
@@ -449,7 +449,7 @@ void gps_app_stop(void) {
   LOG_INFO("GPS 앱 종료");
 
   for (uint8_t i = 0; i < GPS_ID_MAX; i++) {
-    if (gps_instances[i].enabled) {
+    if (gps_apps[i].enabled) {
       gps_app_destroy((gps_id_t)i, false);  /* 리소스 유지 */
     }
   }
@@ -458,51 +458,51 @@ void gps_app_stop(void) {
 }
 
 /*===========================================================================
- * GPS 리소스 정리 (Cleanup)
+ * GPS 앱 리소스 해제
  *===========================================================================*/
 
 /**
- * @brief 특정 GPS 인스턴스 완전 정리
+ * @brief 특정 GPS 앱 완전 해제
  *
  * 태스크 종료, 통신 정지, OS 리소스(큐, 세마포어, 뮤텍스) 모두 해제합니다.
  * 더 이상 해당 GPS를 사용하지 않을 때 호출합니다.
  *
  * @param id GPS ID
- * @return true: 성공, false: 실패 (이미 정지됨 등)
+ * @return true: 성공, false: 실패
  */
-bool gps_cleanup_instance(gps_id_t id) {
+bool gps_app_deinit(gps_id_t id) {
   if (id >= GPS_ID_MAX) {
     LOG_ERR("GPS[%d] 잘못된 ID", id);
     return false;
   }
 
-  LOG_INFO("GPS[%d] 리소스 완전 정리 시작", id);
+  LOG_INFO("GPS[%d] 리소스 해제 시작", id);
 
-  if (gps_instances[id].enabled) {
+  if (gps_apps[id].enabled) {
     gps_app_destroy(id, true);  /* 리소스도 해제 */
   } else {
     /* 이미 정지됨 - OS 리소스만 정리 */
-    gps_deinit(&gps_instances[id].gps);
+    gps_deinit(&gps_apps[id].gps);
   }
 
-  LOG_INFO("GPS[%d] 리소스 완전 정리 완료", id);
+  LOG_INFO("GPS[%d] 리소스 해제 완료", id);
   return true;
 }
 
 /**
- * @brief 모든 GPS 인스턴스 완전 정리
+ * @brief 모든 GPS 앱 완전 해제
  *
  * 모든 GPS 태스크 종료, 통신 정지, OS 리소스 해제합니다.
  * 시스템 종료 또는 GPS 기능 완전 비활성화 시 호출합니다.
  */
-void gps_cleanup_all(void) {
-  LOG_INFO("모든 GPS 리소스 정리 시작");
+void gps_app_deinit_all(void) {
+  LOG_INFO("모든 GPS 리소스 해제 시작");
 
   for (uint8_t i = 0; i < GPS_ID_MAX; i++) {
-    gps_cleanup_instance((gps_id_t)i);
+    gps_app_deinit((gps_id_t)i);
   }
 
-  LOG_INFO("모든 GPS 리소스 정리 완료");
+  LOG_INFO("모든 GPS 리소스 해제 완료");
 }
 
 /*===========================================================================
@@ -513,9 +513,9 @@ void gps_cleanup_all(void) {
  * @brief 특정 GPS ID의 핸들 가져오기
  */
 gps_t *gps_get_instance_handle(gps_id_t id) {
-  if (id >= GPS_ID_MAX || !gps_instances[id].enabled) {
+  if (id >= GPS_ID_MAX || !gps_apps[id].enabled) {
     return NULL;
   }
 
-  return &gps_instances[id].gps;
+  return &gps_apps[id].gps;
 }

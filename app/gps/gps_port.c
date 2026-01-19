@@ -347,9 +347,9 @@ void gps_port_start(gps_t *gps_handle)
  */
 static void gps_uart2_comm_stop(void)
 {
-  /* UART2 페리페럴 리셋 */
-  __HAL_RCC_USART2_FORCE_RESET();
-  __HAL_RCC_USART2_RELEASE_RESET();
+  /* UART2 페리페럴 리셋 (LL 사용) */
+  LL_APB1_GRP1_ForceReset(LL_APB1_GRP1_PERIPH_USART2);
+  LL_APB1_GRP1_ReleaseReset(LL_APB1_GRP1_PERIPH_USART2);
 
   /* DMA 위치 초기화 */
   gps_dma_old_pos = 0;

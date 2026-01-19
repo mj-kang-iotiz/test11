@@ -1,5 +1,8 @@
 #include "base_auto_fix.h"
+#include "board_config.h"
 #include "gps_app.h"
+#include "gps_role.h"
+#include "gps_unicore.h"
 #include "ntrip_app.h"
 #include "gsm_port.h"
 #include "FreeRTOS.h"
@@ -19,24 +22,30 @@
 
 #include "log.h"
 
-// 설정
-#define AVERAGING_DURATION_SEC 50     // 평균 계산 시간 (60초)
-#define MAX_SAMPLES 50               // 최대 샘플 수 (10Hz * 60초)
-#define MIN_SAMPLES 20                // 최소 샘플 수
-#define SIGMA_THRESHOLD 3.0           // 이상치 제거 임계값 (3σ)
+/*===========================================================================
+ * 설정
+ *===========================================================================*/
+#define AVERAGING_DURATION_SEC 50     /* 평균 계산 시간 (초) */
+#define MAX_SAMPLES 50                /* 최대 샘플 수 */
+#define MIN_SAMPLES 20                /* 최소 샘플 수 */
+#define SIGMA_THRESHOLD 3.0           /* 이상치 제거 임계값 (3σ) */
 
-// 상태 관리
+/*===========================================================================
+ * 내부 변수
+ *===========================================================================*/
 static base_auto_fix_state_t state = BASE_AUTO_FIX_DISABLED;
 static uint8_t gps_id = 0;
 static TimerHandle_t averaging_timer = NULL;
 static TimerHandle_t status_timer = NULL;
 
-// 워커 태스크 및 이벤트 큐
+/* 워커 태스크 및 이벤트 큐 */
 static TaskHandle_t worker_task = NULL;
 static QueueHandle_t event_queue = NULL;
+static volatile bool worker_running = false;  /* 태스크 종료 플래그 */
 
 typedef enum {
-  BASE_AUTO_FIX_EVENT_AVERAGING_COMPLETE
+  BASE_AUTO_FIX_EVENT_AVERAGING_COMPLETE,
+  BASE_AUTO_FIX_EVENT_SHUTDOWN           /* 종료 이벤트 */
 } base_auto_fix_event_t;
 
 // 좌표 샘플 버퍼
@@ -513,147 +522,73 @@ static bool calculate_average_with_outlier_removal(void) {
 }
 
 
-static char prev_f9p_fix_loc[128];
 /**
-
  * @brief Base Fixed 모드로 전환
-
+ *
+ * 런타임에 GPS 역할과 타입을 확인하여 적절한 명령을 전송합니다.
  */
-
 static bool switch_to_base_fixed_mode(void) {
-
   LOG_INFO("Base Fixed 모드로 전환 시작...");
 
-
-
-  // 위도/경도/고도를 문자열로 변환 (NMEA 형식)
-
-  char lat_str[32], lon_str[32], alt_str[32];
-
-
-
-  // 위도: DDMM.MMMMM 형식
-
-  double lat_abs = fabs(avg_result.lat);
-
-  int lat_deg = (int)lat_abs;
-
-  double lat_min = (lat_abs - lat_deg) * 60.0;
-
-  snprintf(lat_str, sizeof(lat_str), "%02d%09.6f,%c",
-
-           lat_deg, lat_min, (avg_result.lat >= 0) ? 'N' : 'S');
-
-
-
-  // 경도: DDDMM.MMMMM 형식
-
-  double lon_abs = fabs(avg_result.lon);
-
-  int lon_deg = (int)lon_abs;
-
-  double lon_min = (lon_abs - lon_deg) * 60.0;
-
-  snprintf(lon_str, sizeof(lon_str), "%03d%09.6f,%c",
-
-           lon_deg, lon_min, (avg_result.lon >= 0) ? 'E' : 'W');
-
-
-
-  // 고도: m
-
-  snprintf(alt_str, sizeof(alt_str), "%.3f", avg_result.alt);
-
-
-
-  LOG_INFO("변환된 좌표:");
-
-  LOG_INFO("  Lat: %s", lat_str);
-
-  LOG_INFO("  Lon: %s", lon_str);
-
-  LOG_INFO("  Alt: %s", alt_str);
-
-
-
-#if defined(BOARD_TYPE_BASE_UBLOX)
-
-  // U-blox F9P: Fixed Position 모드 설정
-
-  LOG_INFO("U-blox F9P Fixed Position 모드 설정");
-
-
-
-  // 비동기 콜백 (완료 후 NTRIP/LTE 종료)
-
-  gps_t *gps_handle = gps_get_instance_handle(gps_id);
-
-  if (gps_handle == NULL) {
-
-    LOG_ERR("GPS 인스턴스 가져오기 실패");
-
+  /* 역할 확인 */
+  if (!gps_role_is_base()) {
+    LOG_WARN("Base 역할이 아닙니다. 모드 전환 스킵");
     return false;
-
   }
 
-  // Decimal Degrees 형식으로 직접 변환
+  /* GPS 핸들 가져오기 */
+  gps_t *gps_handle = gps_get_instance_handle(gps_id);
+  if (gps_handle == NULL) {
+    LOG_ERR("GPS 인스턴스 가져오기 실패");
+    return false;
+  }
 
- 
+  /* GPS 타입 확인 */
+  const board_config_t *config = board_get_config();
+  gps_type_t gps_type = config->gps[gps_id];
 
-  snprintf(lat_str, sizeof(lat_str), "%.10f", avg_result.lat);
-  snprintf(lon_str, sizeof(lon_str), "%.10f", avg_result.lon);
-  snprintf(alt_str, sizeof(alt_str), "%.4f", avg_result.alt);
-
-
-  LOG_INFO("변환된 좌표 (Decimal Degrees):");
+  LOG_INFO("평균 좌표:");
   LOG_INFO("  Lat: %.10f", avg_result.lat);
   LOG_INFO("  Lon: %.10f", avg_result.lon);
   LOG_INFO("  Alt: %.4f m", avg_result.alt);
 
-  // 비동기 콜백 (완료 후 NTRIP/LTE 종료)
+  char buf[64];
+  bool result = false;
 
-  if (!ubx_set_fixed_position_async(gps_handle, lat_str, lon_str, alt_str,
-                                      NULL, NULL)) {
+  switch (gps_type) {
+    case GPS_TYPE_UM982: {
+      LOG_INFO("UM982 Base Fixed 모드 설정");
 
-    LOG_ERR("ubx_set_fixed_position_async 실패");
+      char cmd[128];
+      snprintf(cmd, sizeof(cmd), "MODE BASE %.10f %.10f %.4f",
+               avg_result.lat, avg_result.lon, avg_result.alt);
 
-    return false;
+      if (!gps_send_command_sync(gps_id, cmd, 1000)) {
+        LOG_ERR("MODE BASE 명령 전송 실패");
+        return false;
+      }
 
+      snprintf(buf, sizeof(buf), "Start Base (UM982)\n\r");
+      ble_send(buf, strlen(buf), false);
+      result = true;
+      break;
+    }
+
+    case GPS_TYPE_F9P: {
+      LOG_INFO("F9P Base Fixed 모드 설정");
+
+      /* TODO: F9P용 ubx_set_fixed_position_async 구현 필요 */
+      LOG_WARN("F9P Base Fixed 모드 미구현");
+      result = false;
+      break;
+    }
+
+    default:
+      LOG_ERR("알 수 없는 GPS 타입: %d", gps_type);
+      return false;
   }
 
-  char buf[40];
-  sprintf(buf, "Start Base use ntrip\n\r");
-  ble_send(buf, strlen(buf), false);
-
-
-#elif defined(BOARD_TYPE_BASE_UNICORE)
-
-  LOG_INFO("UM982 Base Fixed 모드 설정");
-
-  char cmd[128];
-
-  snprintf(cmd, sizeof(cmd), "MODE BASE %.10f %.10f %.4f\r\n",
-           avg_result.lat, avg_result.lon, avg_result.alt);
-
-  if (!gps_send_command_sync(gps_id, cmd, 1000)) {
-    LOG_ERR("MODE BASE 명령 전송 실패");
-    return false;
-  }
-
-  char buf[40];
-  sprintf(buf, "Start Base use ntrip\n\r");
-  ble_send(buf, strlen(buf), false);
-
-#else
-
-  LOG_WARN("Base 타입이 아닙니다. 모드 전환 스킵");
-
-#endif
-
-  // shutdown_ntrip_and_lte()는 워커 태스크에서 처리
-  // state 변경도 워커 태스크에서 처리
-
-  return true;
+  return result;
 
 }
 
@@ -697,22 +632,30 @@ static void base_auto_fix_worker_task(void *pvParameter) {
   base_auto_fix_event_t event;
 
   LOG_INFO("Base Auto-Fix 워커 태스크 시작");
+  worker_running = true;
 
-  while (1) {
-    // 큐에서 이벤트 대기
-    if (xQueueReceive(event_queue, &event, portMAX_DELAY) == pdTRUE) {
+  while (worker_running) {
+    /* 큐에서 이벤트 대기 (타임아웃으로 종료 플래그 체크) */
+    if (xQueueReceive(event_queue, &event, pdMS_TO_TICKS(100)) == pdTRUE) {
 
+      /* 종료 이벤트 */
+      if (event == BASE_AUTO_FIX_EVENT_SHUTDOWN) {
+        LOG_INFO("워커 태스크 종료 이벤트 수신");
+        break;
+      }
+
+      /* 평균 계산 완료 이벤트 */
       if (event == BASE_AUTO_FIX_EVENT_AVERAGING_COMPLETE) {
         LOG_INFO("평균 계산 완료 이벤트 수신");
 
-        // 샘플 수 확인
+        /* 샘플 수 확인 */
         if (sample_count < MIN_SAMPLES) {
           LOG_ERR("샘플 수 부족 (최소 %d개 필요, 현재 %lu개)", MIN_SAMPLES, sample_count);
           state = BASE_AUTO_FIX_FAILED;
           continue;
         }
 
-        // 평균 계산 (이상치 제거 포함)
+        /* 평균 계산 (이상치 제거 포함) */
         if (!calculate_average_with_outlier_removal()) {
           LOG_ERR("평균 계산 실패");
           state = BASE_AUTO_FIX_FAILED;
@@ -725,19 +668,17 @@ static void base_auto_fix_worker_task(void *pvParameter) {
         LOG_INFO("  Lon: %.9f", avg_result.lon);
         LOG_INFO("  Alt: %.3f", avg_result.alt);
 
-        // Base Fixed 모드로 전환
+        /* Base Fixed 모드로 전환 */
         state = BASE_AUTO_FIX_SWITCHING;
         if (!switch_to_base_fixed_mode()) {
           LOG_ERR("Base Fixed 모드 전환 실패");
           state = BASE_AUTO_FIX_FAILED;
           continue;
         }
-        else
-        {
-          xTimerStop(status_timer, 0);
-        }
 
-        // NTRIP/LTE 종료 (블로킹 1.7초)
+        xTimerStop(status_timer, 0);
+
+        /* NTRIP/LTE 종료 (블로킹) */
         shutdown_ntrip_and_lte();
 
         led_set_color(1, LED_COLOR_NONE);
@@ -749,5 +690,62 @@ static void base_auto_fix_worker_task(void *pvParameter) {
     }
   }
 
+  worker_running = false;
+  LOG_INFO("Base Auto-Fix 워커 태스크 종료");
   vTaskDelete(NULL);
+}
+
+/*===========================================================================
+ * 리소스 해제
+ *===========================================================================*/
+
+void base_auto_fix_deinit(void) {
+  LOG_INFO("Base Auto-Fix 모듈 해제 시작");
+
+  /* 1. 동작 중지 */
+  base_auto_fix_stop();
+
+  /* 2. 워커 태스크 종료 */
+  if (worker_task != NULL && worker_running) {
+    base_auto_fix_event_t event = BASE_AUTO_FIX_EVENT_SHUTDOWN;
+    xQueueSend(event_queue, &event, pdMS_TO_TICKS(100));
+
+    /* 태스크 종료 대기 (최대 500ms) */
+    uint32_t wait_count = 0;
+    while (worker_running && wait_count < 50) {
+      vTaskDelay(pdMS_TO_TICKS(10));
+      wait_count++;
+    }
+
+    if (worker_running) {
+      LOG_WARN("워커 태스크 강제 종료");
+      vTaskDelete(worker_task);
+      worker_running = false;
+    }
+    worker_task = NULL;
+  }
+
+  /* 3. 타이머 삭제 */
+  if (averaging_timer != NULL) {
+    xTimerDelete(averaging_timer, pdMS_TO_TICKS(100));
+    averaging_timer = NULL;
+  }
+
+  if (status_timer != NULL) {
+    xTimerDelete(status_timer, pdMS_TO_TICKS(100));
+    status_timer = NULL;
+  }
+
+  /* 4. 이벤트 큐 삭제 */
+  if (event_queue != NULL) {
+    vQueueDelete(event_queue);
+    event_queue = NULL;
+  }
+
+  /* 5. 상태 초기화 */
+  state = BASE_AUTO_FIX_DISABLED;
+  sample_count = 0;
+  memset(&avg_result, 0, sizeof(avg_result));
+
+  LOG_INFO("Base Auto-Fix 모듈 해제 완료");
 }
