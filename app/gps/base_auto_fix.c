@@ -1,4 +1,5 @@
 #include "base_auto_fix.h"
+#include "event_bus.h"
 #include "board_config.h"
 #include "gps_app.h"
 #include "gps_role.h"
@@ -61,8 +62,12 @@ static bool calculate_average_with_outlier_removal(void);
 static bool switch_to_base_fixed_mode(void);
 static void shutdown_ntrip_and_lte(void);
 static void base_auto_fix_worker_task(void *pvParameter);
-
 static void status_timer_callback(TimerHandle_t xTimer);
+
+// 이벤트 핸들러 선언
+static void on_gps_fix_changed(const event_t *event, void *user_data);
+static void on_gps_gga_update(const event_t *event, void *user_data);
+static void on_ntrip_connected(const event_t *event, void *user_data);
 
 /**
 
@@ -129,6 +134,11 @@ bool base_auto_fix_init(uint8_t id) {
       return false;
     }
   }
+
+  // 이벤트 버스 구독
+  event_bus_subscribe(EVENT_GPS_FIX_CHANGED, on_gps_fix_changed, NULL);
+  event_bus_subscribe(EVENT_GPS_GGA_UPDATE, on_gps_gga_update, NULL);
+  event_bus_subscribe(EVENT_NTRIP_CONNECTED, on_ntrip_connected, NULL);
 
   LOG_INFO("Base Auto-Fix 모듈 초기화 완료");
 
@@ -198,85 +208,71 @@ base_auto_fix_state_t base_auto_fix_get_state(void) {
 
 
 /**
-
- * @brief GPS Fix 상태 변화 콜백
-
+ * @brief GPS Fix 상태 변화 이벤트 핸들러
  */
+static void on_gps_fix_changed(const event_t *event, void *user_data) {
+  (void)user_data;
 
-void base_auto_fix_on_gps_fix_changed(gps_fix_t fix) {
   if (state == BASE_AUTO_FIX_DISABLED || state == BASE_AUTO_FIX_COMPLETED) {
     return;
   }
 
+  gps_fix_t fix = event->data.gps_fix.fix;
+
   // RTK Fix 진입 감지
   if (state == BASE_AUTO_FIX_WAIT_RTK_FIX && fix == GPS_FIX_RTK_FIX) {
-
     LOG_INFO("RTK Fix 진입! 좌표 평균 계산 시작");
-
     state = BASE_AUTO_FIX_AVERAGING;
-
     sample_count = 0;
 
-
-
-    // 60초 타이머 시작
-
+    // 타이머 시작
     xTimerStart(averaging_timer, 0);
-
   }
-
   // RTK Fix 이탈 감지 (평균 계산 중)
-
   else if (state == BASE_AUTO_FIX_AVERAGING && fix != GPS_FIX_RTK_FIX) {
-
     LOG_WARN("RTK Fix 이탈 (fix=%d), 평균 계산 중단", fix);
-
     xTimerStop(averaging_timer, 0);
-
     state = BASE_AUTO_FIX_WAIT_RTK_FIX;
-
     sample_count = 0;
-
   }
-
 }
 
 
 /**
- * @brief GGA 데이터 업데이트
+ * @brief GGA 데이터 업데이트 이벤트 핸들러
  */
-void base_auto_fix_on_gga_update(double lat, double lon, double alt) {
+static void on_gps_gga_update(const event_t *event, void *user_data) {
+  (void)user_data;
 
   if (state != BASE_AUTO_FIX_AVERAGING) {
     return;
   }
 
   if (sample_count < MAX_SAMPLES) {
-    samples[sample_count].lat = lat;
-    samples[sample_count].lon = lon;
-    samples[sample_count].alt = alt;
+    samples[sample_count].lat = event->data.gps_gga.lat;
+    samples[sample_count].lon = event->data.gps_gga.lon;
+    samples[sample_count].alt = event->data.gps_gga.alt;
     sample_count++;
 
     char buf[30];
-    sprintf(buf, "Start Averaging %u%%\n\r", sample_count*2);
-    ble_send(buf, strlen(buf) ,false);
+    sprintf(buf, "Start Averaging %u%%\n\r", sample_count * 2);
+    ble_send(buf, strlen(buf), false);
   }
 }
 
 
 /**
- * @brief NTRIP 연결 상태 업데이트
+ * @brief NTRIP 연결 상태 업데이트 이벤트 핸들러
  */
-void base_auto_fix_on_ntrip_connected(bool connected) {
+static void on_ntrip_connected(const event_t *event, void *user_data) {
+  (void)user_data;
+
+  bool connected = event->data.ntrip.connected;
 
   if (state == BASE_AUTO_FIX_NTRIP_WAIT && connected) {
-
     LOG_INFO("NTRIP 연결됨! RTK Fix 대기 중...");
-
     state = BASE_AUTO_FIX_WAIT_RTK_FIX;
-
   }
-
 }
 
 
@@ -555,38 +551,25 @@ static bool switch_to_base_fixed_mode(void) {
   char buf[64];
   bool result = false;
 
-  switch (gps_type) {
-    case GPS_TYPE_UM982: {
-      LOG_INFO("UM982 Base Fixed 모드 설정");
-
-      char cmd[128];
-      snprintf(cmd, sizeof(cmd), "MODE BASE %.10f %.10f %.4f",
-               avg_result.lat, avg_result.lon, avg_result.alt);
-
-      if (!gps_send_command_sync(gps_id, cmd, 1000)) {
-        LOG_ERR("MODE BASE 명령 전송 실패");
-        return false;
-      }
-
-      snprintf(buf, sizeof(buf), "Start Base (UM982)\n\r");
-      ble_send(buf, strlen(buf), false);
-      result = true;
-      break;
-    }
-
-    case GPS_TYPE_F9P: {
-      LOG_INFO("F9P Base Fixed 모드 설정");
-
-      /* TODO: F9P용 ubx_set_fixed_position_async 구현 필요 */
-      LOG_WARN("F9P Base Fixed 모드 미구현");
-      result = false;
-      break;
-    }
-
-    default:
-      LOG_ERR("알 수 없는 GPS 타입: %d", gps_type);
-      return false;
+  if (gps_type != GPS_TYPE_UM982) {
+    LOG_ERR("지원하지 않는 GPS 타입: %d", gps_type);
+    return false;
   }
+
+  LOG_INFO("UM982 Base Fixed 모드 설정");
+
+  char cmd[128];
+  snprintf(cmd, sizeof(cmd), "MODE BASE %.10f %.10f %.4f",
+           avg_result.lat, avg_result.lon, avg_result.alt);
+
+  if (!gps_send_command_sync(gps_id, cmd, 1000)) {
+    LOG_ERR("MODE BASE 명령 전송 실패");
+    return false;
+  }
+
+  snprintf(buf, sizeof(buf), "Start Base (UM982)\n\r");
+  ble_send(buf, strlen(buf), false);
+  result = true;
 
   return result;
 
@@ -702,10 +685,15 @@ static void base_auto_fix_worker_task(void *pvParameter) {
 void base_auto_fix_deinit(void) {
   LOG_INFO("Base Auto-Fix 모듈 해제 시작");
 
-  /* 1. 동작 중지 */
+  /* 1. 이벤트 구독 해제 */
+  event_bus_unsubscribe(EVENT_GPS_FIX_CHANGED, on_gps_fix_changed);
+  event_bus_unsubscribe(EVENT_GPS_GGA_UPDATE, on_gps_gga_update);
+  event_bus_unsubscribe(EVENT_NTRIP_CONNECTED, on_ntrip_connected);
+
+  /* 2. 동작 중지 */
   base_auto_fix_stop();
 
-  /* 2. 워커 태스크 종료 */
+  /* 3. 워커 태스크 종료 */
   if (worker_task != NULL && worker_running) {
     base_auto_fix_event_t event = BASE_AUTO_FIX_EVENT_SHUTDOWN;
     xQueueSend(event_queue, &event, pdMS_TO_TICKS(100));
@@ -725,7 +713,7 @@ void base_auto_fix_deinit(void) {
     worker_task = NULL;
   }
 
-  /* 3. 타이머 삭제 */
+  /* 4. 타이머 삭제 */
   if (averaging_timer != NULL) {
     xTimerDelete(averaging_timer, pdMS_TO_TICKS(100));
     averaging_timer = NULL;
@@ -736,13 +724,13 @@ void base_auto_fix_deinit(void) {
     status_timer = NULL;
   }
 
-  /* 4. 이벤트 큐 삭제 */
+  /* 5. 이벤트 큐 삭제 */
   if (event_queue != NULL) {
     vQueueDelete(event_queue);
     event_queue = NULL;
   }
 
-  /* 5. 상태 초기화 */
+  /* 6. 상태 초기화 */
   state = BASE_AUTO_FIX_DISABLED;
   sample_count = 0;
   memset(&avg_result, 0, sizeof(avg_result));

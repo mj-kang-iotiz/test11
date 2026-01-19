@@ -1,5 +1,6 @@
 #include "ntrip_app.h"
 #include "FreeRTOS.h"
+#include "event_bus.h"
 #include "gps_app.h"
 #include "led.h"
 #include "queue.h"
@@ -8,7 +9,6 @@
 #include "flash_params.h"
 #include <stdlib.h>
 #include <string.h>
-#include "base_auto_fix.h"
 #include "rs485_app.h"
 
 #ifndef TAG
@@ -479,7 +479,11 @@ led_set_color(LED_ID_1, LED_COLOR_RED);
 
   g_ntrip_connected = true;
 
-  base_auto_fix_on_ntrip_connected(true);
+  event_t ev = {
+    .type = EVENT_NTRIP_CONNECTED,
+    .data.ntrip = { .connected = true }
+  };
+  event_bus_publish(&ev);
 
   led_set_color(LED_ID_1, LED_COLOR_GREEN);
 
@@ -574,7 +578,11 @@ led_set_color(LED_ID_1, LED_COLOR_RED);
           }
 
           g_ntrip_connected = true;
-          base_auto_fix_on_ntrip_connected(true);
+          event_t ev = {
+            .type = EVENT_NTRIP_CONNECTED,
+            .data.ntrip = { .connected = true }
+          };
+          event_bus_publish(&ev);
         }
       }
     }
@@ -626,7 +634,11 @@ led_set_color(LED_ID_1, LED_COLOR_RED);
         }
 
         g_ntrip_connected = true;
-        base_auto_fix_on_ntrip_connected(true);
+        event_t ev = {
+          .type = EVENT_NTRIP_CONNECTED,
+          .data.ntrip = { .connected = true }
+        };
+        event_bus_publish(&ev);
       }
     }
   }

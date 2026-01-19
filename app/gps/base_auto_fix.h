@@ -87,36 +87,6 @@
   base_auto_fix_state_t base_auto_fix_get_state(void);
 
   /**
-
-   * @brief GPS Fix 상태 업데이트 (gps_app.c에서 호출)
-
-   * @param fix GPS Fix 타입
-
-   */
-
-  void base_auto_fix_on_gps_fix_changed(gps_fix_t fix);
-
-  /**
-
-   * @brief GGA 데이터 업데이트 (gps_app.c에서 호출)
-
-   * @param gga GGA 데이터
-
-   */
-
-void base_auto_fix_on_gga_update(double lat, double lon, double alt);
-
-  /**
-
-   * @brief NTRIP 연결 상태 업데이트 (ntrip_app.c에서 호출)
-
-   * @param connected true: 연결됨, false: 연결 끊김
-
-   */
-
-  void base_auto_fix_on_ntrip_connected(bool connected);
-
-  /**
    * @brief 평균 좌표 조회
    * @param result 결과 저장 포인터
    * @return true 성공, false 실패 (아직 계산 안 됨)
