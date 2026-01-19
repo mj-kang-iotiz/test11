@@ -85,8 +85,22 @@ typedef enum {
   LORA_P2P_TRANSFER_MODE_SENDER = 2      // Sender mode (송신, 기본값)
 } lora_p2p_transfer_mode_t;
 
+/*===========================================================================
+ * LoRa 앱 시작/종료 API (BLE 스타일)
+ *===========================================================================*/
+
 /**
- * @brief LoRa 인스턴스 초기화
+ * @brief LoRa 앱 시작 (초기화 + 이벤트 구독)
+ */
+void lora_app_start(void);
+
+/**
+ * @brief LoRa 앱 종료 (이벤트 구독 해제 + 정리)
+ */
+void lora_app_stop(void);
+
+/**
+ * @brief LoRa 인스턴스 초기화 (내부용)
  */
 void lora_instance_init(void);
 

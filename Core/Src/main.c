@@ -127,6 +127,7 @@ void initThread(void *pvParameter) {
 			LOG_ERR("Base Auto-Fix 초기화 실패");
 		}
 		// gsm_task_create(NULL);  // NTRIP 시작 - 필요시 주석 해제
+		// lora_app_start();         // LoRa 시작 - 필요시 주석 해제
 	}
 
   //  flash_params_set_manual_position(true, "37.2901527", "127.033646955", "100.918");
@@ -160,7 +161,7 @@ void initThread(void *pvParameter) {
 //      // gsm_task_create(NULL);
 //    }
 //
-//    // lora_instance_init();
+//    // lora_app_start();
 //  }
 //
 //  if(config->use_rs485)

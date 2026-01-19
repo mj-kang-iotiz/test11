@@ -6,7 +6,6 @@
 #include "gps_role.h"
 #include "gps_unicore.h"
 #include "ntrip_app.h"
-#include "rtcm.h"
 #include "led.h"
 #include <string.h>
 #include <stdlib.h>
@@ -141,9 +140,15 @@ static void gps_app_evt_handler(gps_t *gps, const gps_event_t *event) {
     break;
 
   case GPS_EVENT_RTCM_RECEIVED:
-    /* Base 모드: RTCM 데이터를 LoRa로 전송 */
+    /* Base 모드: RTCM 이벤트 발행 (LoRa에서 구독) */
     if (gps_role_is_base()) {
-      rtcm_send_to_lora(gps);
+      event_t ev = {
+        .type = EVENT_RTCM_FOR_LORA,
+        .data.rtcm = {
+          .gps_id = GPS_ID_BASE
+        }
+      };
+      event_bus_publish(&ev);
     }
     break;
 

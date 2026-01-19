@@ -2,6 +2,7 @@
 #include "lora_app.h"
 #include "lora_port.h"
 #include "board_config.h"
+#include "event_bus.h"
 #include "gps.h"
 #include "gps_app.h"
 #include "rtcm.h"
@@ -16,6 +17,11 @@
 #endif
 
 #include "log.h"
+
+/*===========================================================================
+ * 이벤트 핸들러 선언
+ *===========================================================================*/
+static void on_rtcm_for_lora(const event_t *event, void *user_data);
 
 #define LORA_CMD_QUEUE_SIZE 25  // Increased for multiple RTCM types with fragmentation
 #define LORA_AT_CMD_TIMEOUT_MS 2000
@@ -1402,7 +1408,7 @@ void lora_instance_deinit(void) {
 
 }
 
- void lora_start_rover(void) {
+void lora_start_rover(void) {
 
   LOG_INFO("Rover 모드 LoRa 시작");
   if (!instance.initialized) {
@@ -1413,5 +1419,74 @@ void lora_instance_deinit(void) {
   {
     LOG_WARN("LORA가 이미 초기화 되어 있습니다");
   }
-  
+
+}
+
+/*===========================================================================
+ * LoRa 앱 시작/종료 API (BLE 스타일)
+ *===========================================================================*/
+
+void lora_app_start(void) {
+  const board_config_t *config = board_get_config();
+
+  LOG_INFO("LoRa 앱 시작 - 모드: %s",
+           config->lora_mode == LORA_MODE_BASE ? "BASE" : "ROVER");
+
+  /* 인스턴스 초기화 */
+  if (!instance.initialized) {
+    lora_instance_init();
+  }
+
+  /* Base 모드일 때만 RTCM 이벤트 구독 */
+  if (config->lora_mode == LORA_MODE_BASE) {
+    event_bus_subscribe(EVENT_RTCM_FOR_LORA, on_rtcm_for_lora, NULL);
+    LOG_INFO("RTCM 이벤트 구독 완료");
+  }
+
+  LOG_INFO("LoRa 앱 시작 완료");
+}
+
+void lora_app_stop(void) {
+  const board_config_t *config = board_get_config();
+
+  LOG_INFO("LoRa 앱 종료 시작");
+
+  /* 이벤트 구독 해제 */
+  if (config->lora_mode == LORA_MODE_BASE) {
+    event_bus_unsubscribe(EVENT_RTCM_FOR_LORA, on_rtcm_for_lora);
+  }
+
+  /* 인스턴스 정리 */
+  lora_instance_deinit();
+
+  LOG_INFO("LoRa 앱 종료 완료");
+}
+
+/*===========================================================================
+ * 이벤트 핸들러 구현
+ *===========================================================================*/
+
+/**
+ * @brief RTCM 전송 이벤트 핸들러
+ *
+ * GPS에서 RTCM 수신 시 이벤트 버스를 통해 호출됨
+ */
+static void on_rtcm_for_lora(const event_t *event, void *user_data) {
+  (void)user_data;
+
+  if (!instance.initialized || !instance.init_complete) {
+    LOG_WARN("LoRa not ready, skipping RTCM");
+    return;
+  }
+
+  uint8_t gps_id = event->data.rtcm.gps_id;
+  gps_t *gps = gps_get_instance_handle(gps_id);
+
+  if (gps == NULL) {
+    LOG_ERR("GPS 인스턴스 없음 (id=%d)", gps_id);
+    return;
+  }
+
+  /* RTCM 데이터를 LoRa로 전송 */
+  rtcm_send_to_lora(gps);
 }
