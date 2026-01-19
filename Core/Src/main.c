@@ -44,6 +44,8 @@
 #include "rs485_app.h"
 #include "board_config.h"
 #include "event_bus.h"
+#include "gps_role.h"
+#include "base_auto_fix.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -106,6 +108,14 @@ void initThread(void *pvParameter) {
 	flash_params_init();
 	event_bus_init();
 	gps_app_start();
+
+	/* Base 모드 + Auto 모드일 때 base_auto_fix 초기화 */
+	if (gps_role_is_base() && !params->use_manual_position) {
+		base_auto_fix_init(0);
+		base_auto_fix_start();
+		// gsm_task_create(NULL);  // NTRIP 시작 - 필요시 주석 해제
+	}
+
   //  flash_params_set_manual_position(true, "37.2901527", "127.033646955", "100.918");
 
 	//	flash_params_set_ntrip_url("www.gnssdata.or.kr");
