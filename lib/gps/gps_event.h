@@ -24,9 +24,10 @@ typedef enum gps_protocol_e {
  */
 typedef enum gps_event_type_e {
     GPS_EVENT_NONE = 0,
-    GPS_EVENT_POSITION_UPDATED,   /**< 위치 업데이트 (GGA, BESTNAV, BESTPOS) */
+    GPS_EVENT_POSITION_UPDATED,   /**< 위치 업데이트 (BESTNAV, BESTPOS) */
     GPS_EVENT_HEADING_UPDATED,    /**< 헤딩 업데이트 (THS, HEADING2) */
     GPS_EVENT_VELOCITY_UPDATED,   /**< 속도 업데이트 (RMC, BESTVEL) */
+    GPS_EVENT_FIX_UPDATED,        /**< Fix 상태 업데이트 (GGA) */
     GPS_EVENT_SATELLITE_UPDATED,  /**< 위성 정보 업데이트 (GSA, GSV) */
     GPS_EVENT_RTCM_RECEIVED,      /**< RTCM 데이터 수신 (LoRa 전송용) */
     GPS_EVENT_CMD_RESPONSE,       /**< 명령어 응답 수신 (OK/ERROR) */
@@ -69,6 +70,12 @@ typedef struct {
       double track;           /**< 진행 방향 (degree, 0-360) */
       uint8_t mode;           /**< 모드 */
     } velocity;
+
+    /* Fix 상태 업데이트 (GGA) */
+    struct {
+      uint8_t fix_type;       /**< Fix 타입 (gps_fix_t) */
+      double hdop;            /**< 수평 정밀도 */
+    } fix;
 
     /* 위성 정보 업데이트 */
     struct {
