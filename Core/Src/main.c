@@ -43,6 +43,14 @@
 #include "softuart.h"
 #include "rs485_app.h"
 #include "board_config.h"
+#include "event_bus.h"
+#include "gps_role.h"
+#include "base_auto_fix.h"
+
+#ifndef TAG
+#define TAG "MAIN"
+#endif
+#include "log.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -103,7 +111,24 @@ void initThread(void *pvParameter) {
   user_params_t* params = flash_params_get_current();
   dwt_init();
 	flash_params_init();
+	event_bus_init();
 	gps_app_start();
+
+	/* Base 모드 + Auto-Fix 활성화일 때 초기화 */
+	if (gps_role_is_base() && params->base_auto_fix_enabled) {
+		LOG_INFO("Base Auto-Fix 모드 활성화");
+		if (base_auto_fix_init(0)) {
+			if (base_auto_fix_start()) {
+				LOG_INFO("Base Auto-Fix 시작 성공");
+			} else {
+				LOG_ERR("Base Auto-Fix 시작 실패");
+			}
+		} else {
+			LOG_ERR("Base Auto-Fix 초기화 실패");
+		}
+		// gsm_task_create(NULL);  // NTRIP 시작 - 필요시 주석 해제
+	}
+
   //  flash_params_set_manual_position(true, "37.2901527", "127.033646955", "100.918");
 
 	//	flash_params_set_ntrip_url("www.gnssdata.or.kr");

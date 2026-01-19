@@ -93,24 +93,13 @@ bool event_bus_subscribe(event_type_t type, event_handler_t handler, void *user_
 void event_bus_unsubscribe(event_type_t type, event_handler_t handler);
 
 /**
- * @brief Publish an event (calls handlers synchronously)
+ * @brief Publish an event (async - enqueues and returns immediately)
+ *
+ * Event is placed in queue and processed by dispatcher task.
+ * Publisher is NOT blocked by handler execution.
  *
  * @param event Event to publish
  */
 void event_bus_publish(const event_t *event);
-
-/**
- * @brief Publish from ISR context (deferred execution)
- *
- * @param event Event to publish
- * @return true Success
- * @return false Queue full
- */
-bool event_bus_publish_from_isr(const event_t *event);
-
-/**
- * @brief Process deferred events (call from main loop or task)
- */
-void event_bus_process(void);
 
 #endif /* EVENT_BUS_H */
