@@ -2,6 +2,7 @@
 #include "lora_app.h"
 #include "lora_port.h"
 #include "board_config.h"
+#include "event_bus.h"
 #include "gps.h"
 #include "gps_app.h"
 #include "rtcm.h"
@@ -17,16 +18,16 @@
 
 #include "log.h"
 
-#define LORA_CMD_QUEUE_SIZE 25  // Increased for multiple RTCM types with fragmentation
-#define LORA_AT_CMD_TIMEOUT_MS 2000
-#define LORA_INIT_MAX_RETRY 3
-#define LORA_INIT_TIMEOUT_MS 2000 // work_mode AT command timeout
+/*===========================================================================
+ * 이벤트 핸들러 선언
+ *===========================================================================*/
+static void on_rtcm_for_lora(const event_t *event, void *user_data);
 
-#define LORA_RECV_BUF_SIZE 1024
-
+/*===========================================================================
+ * 태스크 선언
+ *===========================================================================*/
 static void lora_process_task(void *pvParameter);
 static void lora_tx_task(void *pvParameter);
-static void lora_tx_test_task(void *pvParameter);
 
 /**
  * @brief LoRa P2P BASE 모드 초기화 명령어
@@ -49,7 +50,6 @@ static const char *lora_p2p_rover_cmds[] = {
 #define LORA_P2P_BASE_CMD_COUNT (sizeof(lora_p2p_base_cmds) / sizeof(lora_p2p_base_cmds[0]))
 #define LORA_P2P_ROVER_CMD_COUNT (sizeof(lora_p2p_rover_cmds) / sizeof(lora_p2p_rover_cmds[0]))
 
-
 typedef void (*lora_init_callback_t)(bool success, void *user_data);
 
 typedef struct
@@ -61,34 +61,16 @@ typedef struct
   lora_init_callback_t callback; // 완료 콜백
 } lora_init_context_t;
 
-typedef struct
-{
-  lora_t lora;
-  QueueHandle_t queue;     // RX 이벤트 큐
-  QueueHandle_t cmd_queue; // TX 명령어 큐
-  TaskHandle_t rx_task;    // RX Task
-  TaskHandle_t tx_task;    // TX Task
-  SemaphoreHandle_t mutex; // UART 송신 보호용 mutex
-  bool initialized;
-  bool init_complete;
-  bool tx_task_ready;      // TX Task 준비 완료 플래그
-  bool rx_task_ready;      // RX Task 준비 완료 플래그
-
-  lora_cmd_request_t *current_cmd_req;        // 현재 처리 중인 명령어
-  lora_p2p_recv_callback_t p2p_recv_callback; // P2P 수신 콜백
-  void *p2p_recv_user_data;                   // P2P 수신 콜백 사용자 데이터
-
-  rtcm_reassembly_t rtcm_reassembly;          // RTCM fragment 재조립 버퍼
-} lora_app_instance_t;
-
-static lora_app_instance_t instance;
+/*===========================================================================
+ * 앱 인스턴스 (BLE 스타일 - lora_app_t 사용)
+ *===========================================================================*/
+static lora_app_t instance;
 
 /**
  * @brief LoRa 초기화 완료 콜백
  */
 static void lora_overall_init_complete(bool success, void *user_data)
 {
-
   const board_config_t *config = board_get_config();
   if (config->lora_mode == LORA_MODE_BASE)
   {
@@ -101,7 +83,7 @@ static void lora_overall_init_complete(bool success, void *user_data)
 
   if (success)
   {
-    instance.init_complete = true;
+    instance.lora.init_complete = true;
     LOG_INFO("LoRa init complete - now accepting P2P data");
 
     led_set_color(3, LED_COLOR_GREEN);
@@ -266,8 +248,6 @@ static bool lora_init_p2p_rover_async(lora_init_callback_t callback)
   return true;
 }
 
-
-
 /**
  * @brief AT 명령어 응답 파싱 (OK/ERROR 감지)
  *
@@ -298,7 +278,7 @@ static bool lora_parse_at_response(const char *data, size_t len)
 /**
  * @brief RTCM fragment 재조립 버퍼 초기화
  */
-static void rtcm_reassembly_reset(rtcm_reassembly_t *reasm)
+static void rtcm_reassembly_reset(lora_rtcm_reassembly_t *reasm)
 {
   reasm->buffer_pos = 0;
   reasm->expected_len = 0;
@@ -317,7 +297,7 @@ static void rtcm_reassembly_reset(rtcm_reassembly_t *reasm)
  * @param len fragment 길이
  * @return true: 완전한 RTCM 패킷 재조립 완료, false: 더 많은 fragment 필요
  */
-static bool rtcm_reassembly_process(rtcm_reassembly_t *reasm, const uint8_t *data, size_t len)
+static bool rtcm_reassembly_process(lora_rtcm_reassembly_t *reasm, const uint8_t *data, size_t len)
 {
   TickType_t current_tick = xTaskGetTickCount();
 
@@ -503,23 +483,23 @@ static void lora_tx_task(void *pvParameter)
   LOG_INFO("LoRa TX Task started");
 
   // TX Task 준비 완료 플래그 설정
-  instance.tx_task_ready = true;
+  instance.lora.tx_task_ready = true;
   LOG_INFO("LoRa TX Task ready");
 
   const board_config_t *config = board_get_config();
 
   while (1)
   {
-    if (xQueueReceive(instance.cmd_queue, &cmd_req, portMAX_DELAY) == pdTRUE)
+    if (xQueueReceive(instance.lora.cmd_queue, &cmd_req, portMAX_DELAY) == pdTRUE)
     {
-      if(config->lora_mode == LORA_MODE_BASE && instance.init_complete)
+      if(config->lora_mode == LORA_MODE_BASE && instance.lora.init_complete)
       {
         led_set_toggle(3);
       }
       LOG_INFO("LoRa sending command: %s", cmd_req.cmd);
 
       // 현재 명령어 요청 저장 (RX Task에서 응답 처리용)
-      instance.current_cmd_req = &cmd_req;
+      instance.lora.current_cmd_req = &cmd_req;
       if (cmd_req.is_async)
       {
         cmd_req.async_result = false;
@@ -535,14 +515,14 @@ static void lora_tx_task(void *pvParameter)
       // 명령어 전송 (UART 충돌 방지를 위해 mutex 사용)
       if (instance.lora.ops && instance.lora.ops->send)
       {
-        xSemaphoreTake(instance.mutex, portMAX_DELAY);
+        xSemaphoreTake(instance.lora.mutex, portMAX_DELAY);
         instance.lora.ops->send(cmd_req.cmd, strlen(cmd_req.cmd));
-        xSemaphoreGive(instance.mutex);
+        xSemaphoreGive(instance.lora.mutex);
       }
       else
       {
         LOG_ERR("LoRa send ops not available");
-        instance.current_cmd_req = NULL;
+        instance.lora.current_cmd_req = NULL;
         if (cmd_req.is_async)
         {
           cmd_req.async_result = false;
@@ -629,7 +609,7 @@ static void lora_tx_task(void *pvParameter)
       }
 
       // 현재 명령어 요청 초기화
-      instance.current_cmd_req = NULL;
+      instance.lora.current_cmd_req = NULL;
 
       // 비동기: 콜백 호출
       if (cmd_req.is_async)
@@ -666,11 +646,11 @@ static void lora_process_task(void *pvParameter)
   LOG_INFO("LoRa RX Task started");
 
   // RX Task 준비 완료 플래그 설정
-  instance.rx_task_ready = true;
+  instance.lora.rx_task_ready = true;
   LOG_INFO("LoRa RX Task ready");
 
   // TX/RX Task 모두 준비될 때까지 대기
-  while (!instance.tx_task_ready || !instance.rx_task_ready)
+  while (!instance.lora.tx_task_ready || !instance.lora.rx_task_ready)
   {
     vTaskDelay(pdMS_TO_TICKS(10));
   }
@@ -692,7 +672,7 @@ static void lora_process_task(void *pvParameter)
 
   while (1)
   {
-    xQueueReceive(instance.queue, &dummy, portMAX_DELAY);
+    xQueueReceive(instance.lora.rx_queue, &dummy, portMAX_DELAY);
 
     pos = lora_port_get_rx_pos();
     char *lora_recv = lora_port_get_recv_buf();
@@ -710,7 +690,7 @@ static void lora_process_task(void *pvParameter)
         temp_buf[len] = '\0';
 
         // AT 명령어 응답 처리
-        if (instance.current_cmd_req != NULL)
+        if (instance.lora.current_cmd_req != NULL)
         {
           bool result = lora_parse_at_response(temp_buf, len);
           LOG_INFO("Parse result: %s", result ? "OK" : "ERROR/NONE");
@@ -718,17 +698,17 @@ static void lora_process_task(void *pvParameter)
           if (strstr(temp_buf, "OK") || strstr(temp_buf, "ERROR"))
           {
             // 응답 결과 저장
-            if (instance.current_cmd_req->is_async)
+            if (instance.lora.current_cmd_req->is_async)
             {
-              instance.current_cmd_req->async_result = result;
+              instance.lora.current_cmd_req->async_result = result;
             }
             else
             {
-              *(instance.current_cmd_req->result) = result;
+              *(instance.lora.current_cmd_req->result) = result;
             }
 
             // 세마포어 해제 (TX Task로 응답 완료 알림)
-            xSemaphoreGive(instance.current_cmd_req->response_sem);
+            xSemaphoreGive(instance.lora.current_cmd_req->response_sem);
           }
           else
           {
@@ -743,7 +723,7 @@ static void lora_process_task(void *pvParameter)
         // P2P 수신 데이터 처리 (at+recv=...)
         // 초기화 완료 후에만 처리 (초기화 중 데이터는 무시)
 
-        if ((strstr(temp_buf, "at+recv=") || strstr(temp_buf, "AT+RECV=")) && instance.init_complete)
+        if ((strstr(temp_buf, "at+recv=") || strstr(temp_buf, "AT+RECV=")) && instance.lora.init_complete)
         {
           if(config->lora_mode == LORA_MODE_ROVER)
           {
@@ -755,9 +735,9 @@ static void lora_process_task(void *pvParameter)
           if (lora_parse_p2p_recv(temp_buf, &recv_data))
           {
             // 콜백이 등록되어 있으면 콜백 호출
-            if (instance.p2p_recv_callback)
+            if (instance.lora.p2p_recv_callback)
             {
-              instance.p2p_recv_callback(&recv_data, instance.p2p_recv_user_data);
+              instance.lora.p2p_recv_callback(&recv_data, instance.lora.p2p_recv_user_data);
             }
             else
             {
@@ -766,22 +746,22 @@ static void lora_process_task(void *pvParameter)
                        recv_data.data_len, recv_data.rssi, recv_data.snr);
 
               // RTCM fragment 재조립
-              bool complete = rtcm_reassembly_process(&instance.rtcm_reassembly,
+              bool complete = rtcm_reassembly_process(&instance.lora.rtcm_reassembly,
                                                       (uint8_t *)recv_data.data,
                                                       recv_data.data_len);
 
               if (complete)
               {
                 // 완전한 RTCM 패킷 수신 - 검증 후 GPS로 전송
-                if (rtcm_validate_packet(instance.rtcm_reassembly.buffer,
-                                        instance.rtcm_reassembly.expected_len))
+                if (rtcm_validate_packet(instance.lora.rtcm_reassembly.buffer,
+                                        instance.lora.rtcm_reassembly.expected_len))
                 {
                   LOG_INFO("Valid RTCM packet - sending to GPS via UART");
 
                   // GPS UART로 직접 전송
                   if (!gps_send_raw_data(GPS_ID_BASE,
-                                         instance.rtcm_reassembly.buffer,
-                                         instance.rtcm_reassembly.expected_len))
+                                         instance.lora.rtcm_reassembly.buffer,
+                                         instance.lora.rtcm_reassembly.expected_len))
                   {
                     LOG_ERR("Failed to send RTCM data to GPS");
                   }
@@ -792,18 +772,18 @@ static void lora_process_task(void *pvParameter)
                 }
 
                 // 남은 데이터 처리 (다음 RTCM 패킷의 시작일 수 있음)
-                if (instance.rtcm_reassembly.buffer_pos > instance.rtcm_reassembly.expected_len)
+                if (instance.lora.rtcm_reassembly.buffer_pos > instance.lora.rtcm_reassembly.expected_len)
                 {
-                  size_t remaining = instance.rtcm_reassembly.buffer_pos - instance.rtcm_reassembly.expected_len;
+                  size_t remaining = instance.lora.rtcm_reassembly.buffer_pos - instance.lora.rtcm_reassembly.expected_len;
                   LOG_INFO("Remaining %d bytes in buffer - moving to front", remaining);
 
                   // 남은 데이터를 버퍼 앞으로 이동
-                  memmove(instance.rtcm_reassembly.buffer,
-                          &instance.rtcm_reassembly.buffer[instance.rtcm_reassembly.expected_len],
+                  memmove(instance.lora.rtcm_reassembly.buffer,
+                          &instance.lora.rtcm_reassembly.buffer[instance.lora.rtcm_reassembly.expected_len],
                           remaining);
-                  instance.rtcm_reassembly.buffer_pos = remaining;
-                  instance.rtcm_reassembly.has_header = false;
-                  instance.rtcm_reassembly.expected_len = 0;
+                  instance.lora.rtcm_reassembly.buffer_pos = remaining;
+                  instance.lora.rtcm_reassembly.has_header = false;
+                  instance.lora.rtcm_reassembly.expected_len = 0;
 
                   // 남은 데이터로 다음 패킷 시작 시도
                   // (재귀 호출 대신 다음 수신에서 처리됨)
@@ -811,13 +791,13 @@ static void lora_process_task(void *pvParameter)
                 else
                 {
                   // 남은 데이터가 없으면 완전히 초기화
-                  rtcm_reassembly_reset(&instance.rtcm_reassembly);
+                  rtcm_reassembly_reset(&instance.lora.rtcm_reassembly);
                 }
               }
             }
           }
         }
-        else if ((strstr(temp_buf, "at+recv=") || strstr(temp_buf, "AT+RECV=")) && !instance.init_complete)
+        else if ((strstr(temp_buf, "at+recv=") || strstr(temp_buf, "AT+RECV=")) && !instance.lora.init_complete)
         {
           LOG_WARN("Ignoring P2P data during initialization");
         }
@@ -837,26 +817,26 @@ static void lora_process_task(void *pvParameter)
         LOG_INFO("LoRa recv (wrap): %s", temp_buf);
 
         // 동일한 처리 로직
-        if (instance.current_cmd_req != NULL)
+        if (instance.lora.current_cmd_req != NULL)
         {
           bool result = lora_parse_at_response(temp_buf, len);
 
           if (strstr(temp_buf, "OK") || strstr(temp_buf, "ERROR"))
           {
-            if (instance.current_cmd_req->is_async)
+            if (instance.lora.current_cmd_req->is_async)
             {
-              instance.current_cmd_req->async_result = result;
+              instance.lora.current_cmd_req->async_result = result;
             }
             else
             {
-              *(instance.current_cmd_req->result) = result;
+              *(instance.lora.current_cmd_req->result) = result;
             }
 
-            xSemaphoreGive(instance.current_cmd_req->response_sem);
+            xSemaphoreGive(instance.lora.current_cmd_req->response_sem);
           }
         }
 
-        if ((strstr(temp_buf, "at+recv=") || strstr(temp_buf, "AT+RECV=")) && instance.init_complete)
+        if ((strstr(temp_buf, "at+recv=") || strstr(temp_buf, "AT+RECV=")) && instance.lora.init_complete)
         {
           if(config->lora_mode == LORA_MODE_ROVER)
           {
@@ -868,9 +848,9 @@ static void lora_process_task(void *pvParameter)
           if (lora_parse_p2p_recv(temp_buf, &recv_data))
           {
             // 콜백이 등록되어 있으면 콜백 호출
-            if (instance.p2p_recv_callback)
+            if (instance.lora.p2p_recv_callback)
             {
-              instance.p2p_recv_callback(&recv_data, instance.p2p_recv_user_data);
+              instance.lora.p2p_recv_callback(&recv_data, instance.lora.p2p_recv_user_data);
             }
             else
             {
@@ -879,22 +859,22 @@ static void lora_process_task(void *pvParameter)
                        recv_data.data_len, recv_data.rssi, recv_data.snr);
 
               // RTCM fragment 재조립
-              bool complete = rtcm_reassembly_process(&instance.rtcm_reassembly,
+              bool complete = rtcm_reassembly_process(&instance.lora.rtcm_reassembly,
                                                       (uint8_t *)recv_data.data,
                                                       recv_data.data_len);
 
               if (complete)
               {
                 // 완전한 RTCM 패킷 수신 - 검증 후 GPS로 전송
-                if (rtcm_validate_packet(instance.rtcm_reassembly.buffer,
-                                        instance.rtcm_reassembly.expected_len))
+                if (rtcm_validate_packet(instance.lora.rtcm_reassembly.buffer,
+                                        instance.lora.rtcm_reassembly.expected_len))
                 {
                   LOG_INFO("Valid RTCM packet - sending to GPS via UART (wrap)");
 
                   // GPS UART로 직접 전송
                   if (!gps_send_raw_data(GPS_ID_BASE,
-                                         instance.rtcm_reassembly.buffer,
-                                         instance.rtcm_reassembly.expected_len))
+                                         instance.lora.rtcm_reassembly.buffer,
+                                         instance.lora.rtcm_reassembly.expected_len))
                   {
                     LOG_ERR("Failed to send RTCM data to GPS (wrap)");
                   }
@@ -905,18 +885,18 @@ static void lora_process_task(void *pvParameter)
                 }
 
                 // 남은 데이터 처리 (다음 RTCM 패킷의 시작일 수 있음)
-                if (instance.rtcm_reassembly.buffer_pos > instance.rtcm_reassembly.expected_len)
+                if (instance.lora.rtcm_reassembly.buffer_pos > instance.lora.rtcm_reassembly.expected_len)
                 {
-                  size_t remaining = instance.rtcm_reassembly.buffer_pos - instance.rtcm_reassembly.expected_len;
+                  size_t remaining = instance.lora.rtcm_reassembly.buffer_pos - instance.lora.rtcm_reassembly.expected_len;
                   LOG_INFO("Remaining %d bytes in buffer - moving to front (wrap)", remaining);
 
                   // 남은 데이터를 버퍼 앞으로 이동
-                  memmove(instance.rtcm_reassembly.buffer,
-                          &instance.rtcm_reassembly.buffer[instance.rtcm_reassembly.expected_len],
+                  memmove(instance.lora.rtcm_reassembly.buffer,
+                          &instance.lora.rtcm_reassembly.buffer[instance.lora.rtcm_reassembly.expected_len],
                           remaining);
-                  instance.rtcm_reassembly.buffer_pos = remaining;
-                  instance.rtcm_reassembly.has_header = false;
-                  instance.rtcm_reassembly.expected_len = 0;
+                  instance.lora.rtcm_reassembly.buffer_pos = remaining;
+                  instance.lora.rtcm_reassembly.has_header = false;
+                  instance.lora.rtcm_reassembly.expected_len = 0;
 
                   // 남은 데이터로 다음 패킷 시작 시도
                   // (재귀 호출 대신 다음 수신에서 처리됨)
@@ -924,13 +904,13 @@ static void lora_process_task(void *pvParameter)
                 else
                 {
                   // 남은 데이터가 없으면 완전히 초기화
-                  rtcm_reassembly_reset(&instance.rtcm_reassembly);
+                  rtcm_reassembly_reset(&instance.lora.rtcm_reassembly);
                 }
               }
             }
           }
         }
-        else if ((strstr(temp_buf, "at+recv=") || strstr(temp_buf, "AT+RECV=")) && !instance.init_complete)
+        else if ((strstr(temp_buf, "at+recv=") || strstr(temp_buf, "AT+RECV=")) && !instance.lora.init_complete)
         {
           LOG_WARN("Ignoring P2P data during initialization (wrap)");
         }
@@ -943,13 +923,17 @@ static void lora_process_task(void *pvParameter)
   vTaskDelete(NULL);
 }
 
+/*===========================================================================
+ * 인스턴스 초기화/해제 (내부용)
+ *===========================================================================*/
+
 void lora_instance_init(void)
 {
-  memset(&instance, 0, sizeof(lora_app_instance_t));
-  lora_init(&instance.lora);
+  memset(&instance, 0, sizeof(lora_app_t));
+  lora_init(&instance.lora, NULL);
 
   // RTCM 재조립 버퍼 초기화
-  rtcm_reassembly_reset(&instance.rtcm_reassembly);
+  rtcm_reassembly_reset(&instance.lora.rtcm_reassembly);
 
   if (lora_port_init_instance(&instance.lora) != 0)
   {
@@ -957,38 +941,29 @@ void lora_instance_init(void)
     return;
   }
 
-#if LORA_MODE == LORA_MODE_BASE
-  instance.queue = xQueueCreate(10, sizeof(uint8_t));
-  if (instance.queue == NULL)
+  // RX 이벤트 큐 생성
+  instance.lora.rx_queue = xQueueCreate(LORA_RX_QUEUE_SIZE, sizeof(uint8_t));
+  if (instance.lora.rx_queue == NULL)
   {
     LOG_ERR("LORA RX 큐 생성 실패");
     return;
   }
-
-#elif LORA_MODE == LORA_MODE_ROVER
-  instance.queue = xQueueCreate(10, sizeof(uint8_t));
-  if (instance.queue == NULL)
-  {
-    LOG_ERR("LORA RX 큐 생성 실패");
-    return;
-  }
-#endif
 
   // TX 명령어 큐 생성
-  instance.cmd_queue = xQueueCreate(LORA_CMD_QUEUE_SIZE, sizeof(lora_cmd_request_t));
-  if (instance.cmd_queue == NULL)
+  instance.lora.cmd_queue = xQueueCreate(LORA_CMD_QUEUE_SIZE, sizeof(lora_cmd_request_t));
+  if (instance.lora.cmd_queue == NULL)
   {
     LOG_ERR("LORA TX 큐 생성 실패");
     return;
   }
 
-  lora_port_set_queue(instance.queue);
-  instance.mutex = xSemaphoreCreateMutex();
+  lora_port_set_queue(instance.lora.rx_queue);
+  instance.lora.mutex = xSemaphoreCreateMutex();
   lora_port_start(&instance.lora);
 
   // RX Task 생성
   BaseType_t ret = xTaskCreate(lora_process_task, "lora_rx", 1024,
-                               NULL, tskIDLE_PRIORITY + 3, &instance.rx_task);
+                               NULL, tskIDLE_PRIORITY + 3, &instance.lora.rx_task);
   if (ret != pdPASS)
   {
     LOG_ERR("LORA RX Task 생성 실패");
@@ -997,21 +972,52 @@ void lora_instance_init(void)
 
   // TX Task 생성
   ret = xTaskCreate(lora_tx_task, "lora_tx", 1024,
-                    NULL, tskIDLE_PRIORITY + 3, &instance.tx_task);
+                    NULL, tskIDLE_PRIORITY + 3, &instance.lora.tx_task);
   if (ret != pdPASS)
   {
     LOG_ERR("LORA TX Task 생성 실패");
     return;
   }
 
-  instance.initialized = true;
+  instance.lora.initialized = true;
+  instance.enabled = true;
 
   LOG_INFO("LORA 인스턴스 초기화 완료");
 }
 
+void lora_instance_deinit(void)
+{
+  LOG_INFO("LoRa 인스턴스 중지 시작...");
+
+  // 초기화되지 않은 상태면 무시
+  if (!instance.lora.initialized)
+  {
+    LOG_WARN("LoRa 인스턴스가 초기화되지 않았습니다");
+    return;
+  }
+
+  // lora_deinit 호출 (태스크, 큐, 뮤텍스 정리)
+  lora_deinit(&instance.lora);
+
+  // UART 비활성화
+  lora_port_stop(&instance.lora);
+
+  // 앱 레벨 상태 초기화
+  instance.enabled = false;
+
+  led_set_color(3, LED_COLOR_NONE);
+  led_set_state(3, false);
+
+  LOG_INFO("LoRa 인스턴스 중지 완료");
+}
+
+/*===========================================================================
+ * 명령어 전송 API
+ *===========================================================================*/
+
 bool lora_send_command_sync(const char *cmd, uint32_t timeout_ms)
 {
-  if (!instance.initialized)
+  if (!instance.lora.initialized)
   {
     LOG_ERR("LoRa not initialized");
     return false;
@@ -1048,7 +1054,7 @@ bool lora_send_command_sync(const char *cmd, uint32_t timeout_ms)
   cmd_req.cmd[sizeof(cmd_req.cmd) - 1] = '\0';
 
   // TX 태스크로 명령어 전송 요청
-  if (xQueueSend(instance.cmd_queue, &cmd_req, pdMS_TO_TICKS(1000)) != pdTRUE)
+  if (xQueueSend(instance.lora.cmd_queue, &cmd_req, pdMS_TO_TICKS(1000)) != pdTRUE)
   {
     LOG_ERR("Failed to send command to TX task");
     vSemaphoreDelete(response_sem);
@@ -1072,10 +1078,10 @@ bool lora_send_command_sync(const char *cmd, uint32_t timeout_ms)
 }
 
 bool lora_send_command_async(const char *cmd, uint32_t timeout_ms, uint32_t toa_ms,
-                             lora_command_callback_t callback, void *user_data,
+                             lora_cmd_callback_t callback, void *user_data,
                              bool skip_response)
 {
-  if (!instance.initialized)
+  if (!instance.lora.initialized)
   {
     LOG_ERR("LoRa not initialized");
     return false;
@@ -1112,7 +1118,7 @@ bool lora_send_command_async(const char *cmd, uint32_t timeout_ms, uint32_t toa_
   cmd_req.cmd[sizeof(cmd_req.cmd) - 1] = '\0';
 
   // TX 태스크로 명령어 전송 요청
-  if (xQueueSend(instance.cmd_queue, &cmd_req, pdMS_TO_TICKS(1000)) != pdTRUE)
+  if (xQueueSend(instance.lora.cmd_queue, &cmd_req, pdMS_TO_TICKS(1000)) != pdTRUE)
   {
     LOG_ERR("Failed to send command to TX task");
     vSemaphoreDelete(response_sem);
@@ -1123,6 +1129,10 @@ bool lora_send_command_async(const char *cmd, uint32_t timeout_ms, uint32_t toa_
   LOG_INFO("Async command queued");
   return true;
 }
+
+/*===========================================================================
+ * P2P 설정 API
+ *===========================================================================*/
 
 bool lora_set_work_mode(lora_work_mode_t mode, uint32_t timeout_ms)
 {
@@ -1148,6 +1158,10 @@ bool lora_set_p2p_transfer_mode(lora_p2p_transfer_mode_t mode, uint32_t timeout_
   return lora_send_command_sync(cmd, timeout_ms);
 }
 
+/*===========================================================================
+ * P2P 데이터 전송 API
+ *===========================================================================*/
+
 bool lora_send_p2p_data(const char *data, uint32_t timeout_ms)
 {
   if (!data)
@@ -1163,7 +1177,7 @@ bool lora_send_p2p_data(const char *data, uint32_t timeout_ms)
 
 bool lora_send_p2p_raw(const uint8_t *data, size_t len, uint32_t timeout_ms)
 {
-  if (!instance.initialized)
+  if (!instance.lora.initialized)
   {
     LOG_ERR("LoRa not initialized");
     return false;
@@ -1212,9 +1226,9 @@ bool lora_send_p2p_raw(const uint8_t *data, size_t len, uint32_t timeout_ms)
 }
 
 bool lora_send_p2p_raw_async(const uint8_t *data, size_t len, uint32_t timeout_ms,
-                              lora_command_callback_t callback, void *user_data)
+                              lora_cmd_callback_t callback, void *user_data)
 {
-  if (!instance.initialized)
+  if (!instance.lora.initialized)
   {
     LOG_ERR("LoRa not initialized");
     return false;
@@ -1253,13 +1267,6 @@ bool lora_send_p2p_raw_async(const uint8_t *data, size_t len, uint32_t timeout_m
     LOG_INFO("First 4 bytes (binary): %02X %02X %02X %02X", data[0], data[1], data[2], data[3]);
   }
 
-  // Calculate ToA (Time on Air): (bytes / 118) * 350ms * 1.2
-  // uint32_t toa_ms = (len * 350 / 118);  // Base ToA
-  // toa_ms = toa_ms * 12 / 10;  // Add 20% margin (x1.2)
-  // if (toa_ms < 60) {
-  //   toa_ms = 60;  // Minimum ToA
-  // }
-
   uint32_t toa_ms = 0;
 
   // Create AT command: at+send=lorap2p:<HEX_STRING>\r\n
@@ -1272,140 +1279,41 @@ bool lora_send_p2p_raw_async(const uint8_t *data, size_t len, uint32_t timeout_m
 
 void lora_set_p2p_recv_callback(lora_p2p_recv_callback_t callback, void *user_data)
 {
-  instance.p2p_recv_callback = callback;
-  instance.p2p_recv_user_data = user_data;
+  instance.lora.p2p_recv_callback = callback;
+  instance.lora.p2p_recv_user_data = user_data;
 }
+
+/*===========================================================================
+ * 핸들/인스턴스 API
+ *===========================================================================*/
 
 lora_t *lora_get_handle(void)
 {
   return &instance.lora;
 }
 
-void lora_instance_deinit(void) {
-
-  LOG_INFO("LoRa 인스턴스 중지 시작...");
-
- 
-
-  // 초기화되지 않은 상태면 무시
-
-  if (!instance.initialized) {
-
-    LOG_WARN("LoRa 인스턴스가 초기화되지 않았습니다");
-
-    return;
-
+lora_t *lora_app_get_handle(void)
+{
+  if (!instance.enabled) {
+    return NULL;
   }
-
- 
-
-  // 1. RX Task 삭제
-
-  if (instance.rx_task != NULL) {
-
-    vTaskDelete(instance.rx_task);
-
-    instance.rx_task = NULL;
-
-    LOG_INFO("LoRa RX Task 삭제 완료");
-
-  }
-
- 
-
-  // 2. TX Task 삭제
-
-  if (instance.tx_task != NULL) {
-
-    vTaskDelete(instance.tx_task);
-
-    instance.tx_task = NULL;
-
-    LOG_INFO("LoRa TX Task 삭제 완료");
-
-  }
-
- 
-
-  // 3. Queue 삭제
-
-  if (instance.queue != NULL) {
-
-    vQueueDelete(instance.queue);
-
-    instance.queue = NULL;
-
-    LOG_INFO("LoRa RX Queue 삭제 완료");
-
-  }
-
- 
-
-  if (instance.cmd_queue != NULL) {
-
-    vQueueDelete(instance.cmd_queue);
-
-    instance.cmd_queue = NULL;
-
-    LOG_INFO("LoRa CMD Queue 삭제 완료");
-
-  }
-
- 
-
-  // 4. Mutex 삭제
-
-  if (instance.mutex != NULL) {
-
-    vSemaphoreDelete(instance.mutex);
-
-    instance.mutex = NULL;
-
-    LOG_INFO("LoRa Mutex 삭제 완료");
-
-  }
-
- 
-
-  // 5. UART 비활성화
-
-  lora_port_stop(&instance.lora);
-
- 
-
-  // 6. 상태 초기화
-
-  instance.initialized = false;
-
-  instance.init_complete = false;
-
-  instance.tx_task_ready = false;
-
-  instance.rx_task_ready = false;
-
-  instance.current_cmd_req = NULL;
-
-  instance.p2p_recv_callback = NULL;
-
-  instance.p2p_recv_user_data = NULL;
-
- 
-
-  // 7. RTCM 재조립 버퍼 초기화
-
-  memset(&instance.rtcm_reassembly, 0, sizeof(instance.rtcm_reassembly));
- 
-  led_set_color(3, LED_COLOR_NONE);
-  led_set_state(3, false);
-
-  LOG_INFO("LoRa 인스턴스 중지 완료");
-
+  return &instance.lora;
 }
 
- void lora_start_rover(void) {
+lora_app_t *lora_app_get_instance(void)
+{
+  return &instance;
+}
 
+/*===========================================================================
+ * 하위 호환성 API
+ *===========================================================================*/
+
+void lora_start_rover(void)
+{
   LOG_INFO("Rover 모드 LoRa 시작");
-  if (!instance.initialized) {
+  if (!instance.lora.initialized)
+  {
     lora_instance_init();
     LOG_INFO("LoRa 초기화 완료");
   }
@@ -1413,5 +1321,129 @@ void lora_instance_deinit(void) {
   {
     LOG_WARN("LORA가 이미 초기화 되어 있습니다");
   }
-  
+}
+
+/*===========================================================================
+ * LoRa 앱 시작/종료 API (BLE 스타일)
+ *===========================================================================*/
+
+void lora_app_start(void)
+{
+  const board_config_t *config = board_get_config();
+
+  LOG_INFO("LoRa 앱 시작 - 모드: %s",
+           config->lora_mode == LORA_MODE_BASE ? "BASE" : "ROVER");
+
+  /* 인스턴스 초기화 */
+  if (!instance.lora.initialized)
+  {
+    lora_instance_init();
+  }
+
+  /* Base 모드일 때만 RTCM 이벤트 구독 */
+  if (config->lora_mode == LORA_MODE_BASE)
+  {
+    event_bus_subscribe(EVENT_RTCM_FOR_LORA, on_rtcm_for_lora, NULL);
+    LOG_INFO("RTCM 이벤트 구독 완료");
+  }
+
+  LOG_INFO("LoRa 앱 시작 완료");
+}
+
+void lora_app_stop(void)
+{
+  const board_config_t *config = board_get_config();
+
+  LOG_INFO("LoRa 앱 종료 시작");
+
+  /* 이벤트 구독 해제 */
+  if (config->lora_mode == LORA_MODE_BASE)
+  {
+    event_bus_unsubscribe(EVENT_RTCM_FOR_LORA, on_rtcm_for_lora);
+  }
+
+  /* 인스턴스 정리 */
+  lora_instance_deinit();
+
+  LOG_INFO("LoRa 앱 종료 완료");
+}
+
+/*===========================================================================
+ * 앱 레벨 래퍼 API
+ *===========================================================================*/
+
+bool lora_app_is_ready(void)
+{
+  return lora_is_ready(&instance.lora);
+}
+
+bool lora_app_send_p2p_raw(const uint8_t *data, size_t len, uint32_t timeout_ms,
+                           lora_cmd_callback_t callback, void *user_data)
+{
+  return lora_send_p2p_raw_async(data, len, timeout_ms, callback, user_data);
+}
+
+bool lora_app_send_cmd_sync(const char *cmd, uint32_t timeout_ms)
+{
+  return lora_send_command_sync(cmd, timeout_ms);
+}
+
+bool lora_app_send_cmd_async(const char *cmd, uint32_t timeout_ms, uint32_t toa_ms,
+                             lora_cmd_callback_t callback, void *user_data,
+                             bool skip_response)
+{
+  return lora_send_command_async(cmd, timeout_ms, toa_ms, callback, user_data, skip_response);
+}
+
+bool lora_app_set_work_mode(lora_work_mode_t mode, uint32_t timeout_ms)
+{
+  return lora_set_work_mode(mode, timeout_ms);
+}
+
+bool lora_app_set_p2p_config(uint32_t freq, uint8_t sf, uint8_t bw, uint8_t cr,
+                             uint16_t preamlen, uint8_t pwr, uint32_t timeout_ms)
+{
+  return lora_set_p2p_config(freq, sf, bw, cr, preamlen, pwr, timeout_ms);
+}
+
+bool lora_app_set_p2p_transfer_mode(lora_p2p_transfer_mode_t mode, uint32_t timeout_ms)
+{
+  return lora_set_p2p_transfer_mode(mode, timeout_ms);
+}
+
+void lora_app_set_p2p_recv_callback(lora_p2p_recv_callback_t callback, void *user_data)
+{
+  lora_set_p2p_recv_callback(callback, user_data);
+}
+
+/*===========================================================================
+ * 이벤트 핸들러 구현
+ *===========================================================================*/
+
+/**
+ * @brief RTCM 전송 이벤트 핸들러
+ *
+ * GPS에서 RTCM 수신 시 이벤트 버스를 통해 호출됨
+ */
+static void on_rtcm_for_lora(const event_t *event, void *user_data)
+{
+  (void)user_data;
+
+  if (!instance.lora.initialized || !instance.lora.init_complete)
+  {
+    LOG_WARN("LoRa not ready, skipping RTCM");
+    return;
+  }
+
+  uint8_t gps_id = event->data.rtcm.gps_id;
+  gps_t *gps = gps_get_instance_handle(gps_id);
+
+  if (gps == NULL)
+  {
+    LOG_ERR("GPS 인스턴스 없음 (id=%d)", gps_id);
+    return;
+  }
+
+  /* RTCM 데이터를 LoRa로 전송 */
+  rtcm_send_to_lora(gps);
 }

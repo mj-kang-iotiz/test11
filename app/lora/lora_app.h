@@ -1,204 +1,167 @@
 #ifndef LORA_APP_H
 #define LORA_APP_H
 
+/**
+ * @file lora_app.h
+ * @brief LoRa 애플리케이션 헤더
+ *
+ * LoRa 앱 레벨 기능:
+ * - LoRa 앱 시작/종료 (ble_app_start/stop 참고)
+ * - 이벤트 버스 연동
+ * - 외부 모듈과 디커플링
+ */
+
 #include "lora.h"
-#include "FreeRTOS.h"
-#include "queue.h"
-#include "semphr.h"
-#include "task.h"
-#include <stdint.h>
 #include <stdbool.h>
+#include <stdint.h>
 
-/**
- * @brief LoRa P2P 수신 데이터 구조체
- */
+/*===========================================================================
+ * LoRa 앱 인스턴스 (ble_instance_t 참고)
+ *===========================================================================*/
 typedef struct {
-  int16_t rssi;           // 수신 신호 강도 (dBm)
-  int16_t snr;            // Signal-to-Noise Ratio (dB)
-  uint16_t data_len;      // 데이터 길이
-  char data[256];
-} lora_p2p_recv_data_t;
+    lora_t lora;                    /**< LoRa 핸들 (lib/lora) - 태스크/큐 포함 */
+    bool enabled;                   /**< 활성화 상태 */
+} lora_app_t;
 
-/**
- * @brief RTCM fragment 재조립 버퍼
- */
-#define RTCM_REASSEMBLY_BUF_SIZE 512
-#define RTCM_REASSEMBLY_TIMEOUT_MS 5000  // 5초 타임아웃
-
-typedef struct {
-  
-  uint8_t buffer[RTCM_REASSEMBLY_BUF_SIZE];  // 재조립 버퍼
-  uint16_t buffer_pos;                        // 현재 버퍼 위치
-  uint16_t expected_len;                      // 예상 RTCM 패킷 전체 길이
-  bool has_header;                            // 헤더 수신 완료 여부
-  TickType_t last_recv_tick;                  // 마지막 수신 시간
-} rtcm_reassembly_t;
-
-void lora_start_tx_test(void);
-/**
- * @brief LoRa P2P 수신 콜백
- *
- * @param recv_data 수신 데이터
- * @param user_data 사용자 데이터
- */
-typedef void (*lora_p2p_recv_callback_t)(lora_p2p_recv_data_t *recv_data, void *user_data);
-
-/**
- * @brief LoRa 명령어 응답 콜백
- *
- * @param success true: OK, false: ERROR/TIMEOUT
- * @param user_data 사용자 데이터
- */
-typedef void (*lora_command_callback_t)(bool success, void *user_data);
-
-/**
- * @brief LoRa 명령어 요청 구조체
- */
-typedef struct {
-  char cmd[256];                  // 전송할 AT 명령어
-  uint32_t timeout_ms;            // 타임아웃 (ms)
-  uint32_t toa_ms;                // Time on Air (ms) - OK 응답 후 추가 대기 시간
-  bool is_async;                  // true: 비동기, false: 동기
-  bool skip_response;             // true: 응답 파싱 건너뛰기 (명령어만 전송)
-
-  SemaphoreHandle_t response_sem; // 응답 대기용 세마포어
-  bool *result;                   // 동기 응답 결과 (true: OK, false: ERROR/TIMEOUT)
-
-  lora_command_callback_t callback; // 비동기 완료 콜백
-  void *user_data;                  // 사용자 데이터
-  bool async_result;                // 비동기 결과 저장용
-} lora_cmd_request_t;
-
-/**
- * @brief LoRa 작동 모드
- */
+/*===========================================================================
+ * LoRa 작동 모드 (앱 레벨)
+ *===========================================================================*/
 typedef enum {
-  LORA_WORK_MODE_LORAWAN = 0,  // LoRaWAN 모드
-  LORA_WORK_MODE_P2P = 1       // P2P 모드
+  LORA_WORK_MODE_LORAWAN = 0,
+  LORA_WORK_MODE_P2P = 1
 } lora_work_mode_t;
 
-/**
- * @brief LoRa P2P 전송 모드
- */
 typedef enum {
-  LORA_P2P_TRANSFER_MODE_RECEIVER = 1,   // Receiver mode (수신)
-  LORA_P2P_TRANSFER_MODE_SENDER = 2      // Sender mode (송신, 기본값)
+  LORA_P2P_TRANSFER_MODE_RECEIVER = 1,
+  LORA_P2P_TRANSFER_MODE_SENDER = 2
 } lora_p2p_transfer_mode_t;
 
-/**
- * @brief LoRa 인스턴스 초기화
- */
-void lora_instance_init(void);
+/*===========================================================================
+ * 앱 시작/종료 API (ble_app_start/stop 참고)
+ *===========================================================================*/
 
 /**
- * @brief LoRa 명령어 전송 (동기)
+ * @brief LoRa 앱 시작
  *
- * @param cmd AT 명령어 (예: "AT+SET_CONFIG=lora:work_mode:0\r\n")
- * @param timeout_ms 타임아웃 (ms)
- * @return true: OK, false: ERROR/TIMEOUT
+ * board_config.h 설정을 읽어서 LoRa 앱 시작
+ * - HAL 초기화
+ * - RX/TX 태스크 생성
+ * - 이벤트 버스 구독 (Base 모드)
  */
-bool lora_send_command_sync(const char *cmd, uint32_t timeout_ms);
+void lora_app_start(void);
 
 /**
- * @brief LoRa 명령어 전송 (비동기)
+ * @brief LoRa 앱 종료
  *
- * @param cmd AT 명령어
- * @param timeout_ms 타임아웃 (ms)
- * @param toa_ms Time on Air (ms) - OK 응답 후 추가 대기 시간
- * @param callback 완료 콜백
- * @param user_data 사용자 데이터
- * @param skip_response true: 응답 파싱 건너뛰기, false: 정상 응답 대기
- * @return true: 요청 성공, false: 요청 실패
+ * LoRa 앱을 안전하게 종료하고 리소스 정리
  */
-bool lora_send_command_async(const char *cmd, uint32_t timeout_ms, uint32_t toa_ms,
-                              lora_command_callback_t callback, void *user_data,
-                              bool skip_response);
+void lora_app_stop(void);
 
-/**
- * @brief LoRa 작동 모드 설정
- *
- * @param mode 작동 모드 (P2P or LoRaWAN)
- * @param timeout_ms 타임아웃 (ms)
- * @return true: 성공, false: 실패
- */
-bool lora_set_work_mode(lora_work_mode_t mode, uint32_t timeout_ms);
-
-/**
- * @brief LoRa P2P 설정
- *
- * @param freq 주파수 (Hz) - 예: 868000000, 915000000
- * @param sf Spreading Factor (7~12)
- * @param bw Bandwidth (0:125kHz, 1:250kHz, 2:500kHz)
- * @param cr Coding Rate (1:4/5, 2:4/6, 3:4/7, 4:4/8)
- * @param preamlen Preamble Length (5~65535)
- * @param pwr TX Power (5~20 dBm)
- * @param timeout_ms 타임아웃 (ms)
- * @return true: 성공, false: 실패
- */
-bool lora_set_p2p_config(uint32_t freq, uint8_t sf, uint8_t bw, uint8_t cr,
-                         uint16_t preamlen, uint8_t pwr, uint32_t timeout_ms);
-
-/**
- * @brief LoRa P2P 전송 모드 설정
- *
- * @param mode 전송 모드 (Event-driven or Continuous)
- * @param timeout_ms 타임아웃 (ms)
- * @return true: 성공, false: 실패
- */
-bool lora_set_p2p_transfer_mode(lora_p2p_transfer_mode_t mode, uint32_t timeout_ms);
-
-/**
- * @brief LoRa P2P 데이터 전송 (HEX string)
- *
- * @param data 전송할 데이터 (HEX string, 예: "48656C6C6F" = "Hello")
- * @param timeout_ms 타임아웃 (ms)
- * @return true: 성공, false: 실패
- */
-bool lora_send_p2p_data(const char *data, uint32_t timeout_ms);
-
-/**
- * @brief LoRa P2P Raw Binary 데이터 전송 (동기)
- *
- * Binary 데이터를 HEX ASCII로 변환하여 전송
- * 최대 118바이트까지 전송 가능 (HEX 변환 시 236 문자)
- *
- * @param data 전송할 raw binary 데이터
- * @param len 데이터 길이 (바이트, 최대 118)
- * @param timeout_ms 타임아웃 (ms)
- * @return true: 성공, false: 실패
- */
-bool lora_send_p2p_raw(const uint8_t *data, size_t len, uint32_t timeout_ms);
-
-/**
- * @brief LoRa P2P Raw Binary 데이터 전송 (비동기)
- *
- * Binary 데이터를 HEX ASCII로 변환하여 비동기 전송
- * 최대 118바이트까지 전송 가능 (HEX 변환 시 236 문자)
- *
- * @param data 전송할 raw binary 데이터
- * @param len 데이터 길이 (바이트, 최대 118)
- * @param timeout_ms 타임아웃 (ms)
- * @param callback 완료 콜백
- * @param user_data 사용자 데이터
- * @return true: 큐 추가 성공, false: 실패
- */
-bool lora_send_p2p_raw_async(const uint8_t *data, size_t len, uint32_t timeout_ms,
-                              lora_command_callback_t callback, void *user_data);
-
-/**
- * @brief LoRa P2P 수신 콜백 등록
- *
- * @param callback 수신 콜백 (NULL이면 GPS로 자동 전송)
- * @param user_data 사용자 데이터
- */
-void lora_set_p2p_recv_callback(lora_p2p_recv_callback_t callback, void *user_data);
+/*===========================================================================
+ * 핸들/인스턴스 API
+ *===========================================================================*/
 
 /**
  * @brief LoRa 핸들 가져오기
- *
- * @return lora_t* LoRa 핸들
+ * @return lora_t* LoRa 핸들 (NULL: 비활성화)
  */
-lora_t *lora_get_handle(void);
+lora_t *lora_app_get_handle(void);
+
+/**
+ * @brief LoRa 앱 인스턴스 가져오기
+ * @return lora_app_t* 앱 인스턴스
+ */
+lora_app_t *lora_app_get_instance(void);
+
+/*===========================================================================
+ * 데이터 송신 API (래퍼)
+ *===========================================================================*/
+
+/**
+ * @brief P2P Raw 데이터 전송 (비동기)
+ *
+ * lora_send_p2p_raw() 래퍼 - 앱 인스턴스 사용
+ *
+ * @param data Raw binary 데이터
+ * @param len 데이터 길이 (최대 118)
+ * @param timeout_ms 타임아웃
+ * @param callback 완료 콜백
+ * @param user_data 사용자 데이터
+ * @return true: 큐 추가 성공
+ */
+bool lora_app_send_p2p_raw(const uint8_t *data, size_t len, uint32_t timeout_ms,
+                           lora_cmd_callback_t callback, void *user_data);
+
+/**
+ * @brief AT 명령어 전송 (동기) - 래퍼
+ * @param cmd AT 명령어
+ * @param timeout_ms 타임아웃
+ * @return true: OK
+ */
+bool lora_app_send_cmd_sync(const char *cmd, uint32_t timeout_ms);
+
+/**
+ * @brief AT 명령어 전송 (비동기) - 래퍼
+ */
+bool lora_app_send_cmd_async(const char *cmd, uint32_t timeout_ms, uint32_t toa_ms,
+                             lora_cmd_callback_t callback, void *user_data,
+                             bool skip_response);
+
+/*===========================================================================
+ * P2P 설정 API
+ *===========================================================================*/
+
+/**
+ * @brief LoRa 작동 모드 설정
+ */
+bool lora_app_set_work_mode(lora_work_mode_t mode, uint32_t timeout_ms);
+
+/**
+ * @brief LoRa P2P 설정
+ */
+bool lora_app_set_p2p_config(uint32_t freq, uint8_t sf, uint8_t bw, uint8_t cr,
+                             uint16_t preamlen, uint8_t pwr, uint32_t timeout_ms);
+
+/**
+ * @brief LoRa P2P 전송 모드 설정
+ */
+bool lora_app_set_p2p_transfer_mode(lora_p2p_transfer_mode_t mode, uint32_t timeout_ms);
+
+/**
+ * @brief P2P 수신 콜백 등록
+ */
+void lora_app_set_p2p_recv_callback(lora_p2p_recv_callback_t callback, void *user_data);
+
+/*===========================================================================
+ * 상태 조회 API
+ *===========================================================================*/
+
+/**
+ * @brief LoRa 준비 상태
+ * @return true: 초기화 완료
+ */
+bool lora_app_is_ready(void);
+
+/*===========================================================================
+ * 하위 호환성 API (기존 코드 지원)
+ *===========================================================================*/
+
+/* 기존 함수명 유지 - deprecated, lora_app_* 사용 권장 */
+void lora_instance_init(void);
 void lora_instance_deinit(void);
 void lora_start_rover(void);
-#endif
+lora_t *lora_get_handle(void);
+
+/* 기존 전역 함수 - deprecated */
+bool lora_send_command_sync(const char *cmd, uint32_t timeout_ms);
+bool lora_send_command_async(const char *cmd, uint32_t timeout_ms, uint32_t toa_ms,
+                             lora_cmd_callback_t callback, void *user_data,
+                             bool skip_response);
+bool lora_send_p2p_raw_async(const uint8_t *data, size_t len, uint32_t timeout_ms,
+                             lora_cmd_callback_t callback, void *user_data);
+bool lora_set_work_mode(lora_work_mode_t mode, uint32_t timeout_ms);
+bool lora_set_p2p_config(uint32_t freq, uint8_t sf, uint8_t bw, uint8_t cr,
+                         uint16_t preamlen, uint8_t pwr, uint32_t timeout_ms);
+bool lora_set_p2p_transfer_mode(lora_p2p_transfer_mode_t mode, uint32_t timeout_ms);
+
+#endif /* LORA_APP_H */

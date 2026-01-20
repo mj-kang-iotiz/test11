@@ -17,8 +17,11 @@ typedef enum {
     EVENT_NTRIP_CONNECTED = 0x0200,
     EVENT_NTRIP_DISCONNECTED,
 
-    /* System Events (0x0300 ~ 0x03FF) */
-    EVENT_SYSTEM_SHUTDOWN = 0x0300,
+    /* LoRa Events (0x0300 ~ 0x03FF) */
+    EVENT_RTCM_FOR_LORA = 0x0300,
+
+    /* System Events (0x0400 ~ 0x04FF) */
+    EVENT_SYSTEM_SHUTDOWN = 0x0400,
 
     EVENT_TYPE_MAX
 } event_type_t;
@@ -42,6 +45,10 @@ typedef struct {
     bool connected;
 } event_ntrip_data_t;
 
+typedef struct {
+    uint8_t gps_id;
+} event_rtcm_data_t;
+
 /**
  * @brief Event structure
  */
@@ -51,6 +58,7 @@ typedef struct {
         event_gps_fix_data_t gps_fix;
         event_gps_gga_data_t gps_gga;
         event_ntrip_data_t ntrip;
+        event_rtcm_data_t rtcm;
     } data;
 } event_t;
 

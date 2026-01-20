@@ -256,7 +256,7 @@ static void on_gps_gga_update(const event_t *event, void *user_data) {
 
     char buf[30];
     sprintf(buf, "Start Averaging %u%%\n\r", sample_count * 2);
-    ble_send(buf, strlen(buf), false);
+    ble_app_send(buf, strlen(buf));
   }
 }
 
@@ -364,7 +364,7 @@ static void status_timer_callback(TimerHandle_t xTimer) {
   
   char buf[10];
   sprintf(buf, "%d,%d\n\r", connect_status, fix);
-  ble_send(buf, strlen(buf), false);
+  ble_app_send(buf, strlen(buf));
 
 }
 
@@ -568,7 +568,7 @@ static bool switch_to_base_fixed_mode(void) {
   }
 
   snprintf(buf, sizeof(buf), "Start Base (UM982)\n\r");
-  ble_send(buf, strlen(buf), false);
+  ble_app_send(buf, strlen(buf));
   result = true;
 
   return result;
